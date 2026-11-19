@@ -1,0 +1,29 @@
+// Ce fichier est copié vers app/build.gradle par le workflow GitHub
+// (pour que tous les fichiers du dépôt restent à la racine).
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'bj.sebpay.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'bj.sebpay.app'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+}
