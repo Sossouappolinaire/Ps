@@ -5,7 +5,7 @@
 
     <application
         android:allowBackup="false"
-        android:label="SebPay"
+        android:label="Kouamépay"
         android:usesCleartextTraffic="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 

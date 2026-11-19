@@ -244,7 +244,7 @@ type Keys = { base_url: string; public_key: string; secret_key: string };
 
 async function loadKeys(): Promise<Keys> {
   const { data, error } = await db.from("sebpay_keys").select("*").eq("id", 1).maybeSingle();
-  if (error || !data) throw new Error("Clés SebPay introuvables (table sebpay_keys).");
+  if (error || !data) throw new Error("Configuration de paiement introuvable.");
   return data as Keys;
 }
 
@@ -259,7 +259,7 @@ async function sebpay(keys: Keys, method: string, path: string, body?: unknown) 
     body: body ? JSON.stringify(body) : undefined,
   });
   const j = await res.json().catch(() => ({}));
-  if (!res.ok || j.success === false) throw new SebpayError(j.message || `Erreur SebPay (HTTP ${res.status})`, res.status);
+  if (!res.ok || j.success === false) throw new SebpayError(String(j.message || `Erreur de paiement (HTTP ${res.status})`).replace(/seb\s?pay/gi, "Kouamépay"), res.status);
   return j.data !== undefined ? j.data : j;
 }
 
@@ -413,11 +413,11 @@ const ONLINE_WINDOW_MS = 90_000; // l'admin est « en ligne » s'il a donné sig
 const ESCALATE_REPLY =
   "Votre problème est pris en compte, veuillez patienter, l'administrateur va vous répondre dans un instant.";
 
-const SUPPORT_PROMPT = `Tu es le service client de l'application SebPay. Réponds toujours dans la langue du client (français par défaut), en 2 à 5 phrases courtes, de façon claire et polie.
-Ce que tu sais de SebPay :
-- Onglet « Encaisser » : on choisit le pays, le réseau Mobile Money (liste fournie par SebPay), le numéro qui paie (débité de son compte Mobile Money), le numéro qui reçoit l'argent (avec son réseau et le nom du bénéficiaire) et le montant ; une fois le paiement réussi, le net est versé automatiquement au numéro qui reçoit. Le client confirme le paiement sur son téléphone (parfois avec un code OTP). Le statut passe de « En attente » à « Réussi » ou « Refusé ».
-- Onglet « Décaisser » (administrateur seulement) : envoi d'argent depuis le wallet SebPay vers un numéro Mobile Money. Si le décaissement est refusé, SebPay recrédite le wallet automatiquement.
-- Pays non accepté par SebPay : l'application propose le paiement en BNB (BNB Smart Chain) via CryptAPI : on saisit un montant en USD, l'application affiche une adresse unique et le montant exact en BNB à envoyer.
+const SUPPORT_PROMPT = `Tu es le service client de l'application Kouamépay. Ne mentionne jamais le nom d'un prestataire de paiement ou d'un fournisseur tiers : parle uniquement de Kouamépay. Réponds toujours dans la langue du client (français par défaut), en 2 à 5 phrases courtes, de façon claire et polie.
+Ce que tu sais de Kouamépay :
+- Onglet « Encaisser » : on choisit le pays, le réseau Mobile Money (liste fournie par l'application), le numéro qui paie (débité de son compte Mobile Money), le numéro qui reçoit l'argent (avec son réseau et le nom du bénéficiaire) et le montant ; une fois le paiement réussi, le net est versé automatiquement au numéro qui reçoit. Le client confirme le paiement sur son téléphone (parfois avec un code OTP). Le statut passe de « En attente » à « Réussi » ou « Refusé ».
+- Onglet « Décaisser » (administrateur seulement) : envoi d'argent depuis le wallet Kouamépay vers un numéro Mobile Money. Si le décaissement est refusé, le wallet est recrédité automatiquement.
+- Pays non pris en charge en Mobile Money : l'application propose le paiement en BNB (BNB Smart Chain) via CryptAPI : on saisit un montant en USD, l'application affiche une adresse unique et le montant exact en BNB à envoyer.
 - Commission : 5 % au total, indiquée sur le reçu avant confirmation. Le client BNB indique aussi le réseau et le numéro qui recevront l'argent ; 2 minutes après, il envoie ses preuves (images) à l'administrateur, qui décaisse à la main puis marque « Payé » ; le client peut signaler « argent non reçu » depuis l'Historique.
 - Onglet « Historique » : les dernières transactions et leur statut. Un encaissement réussi peut être remboursé par l'administrateur.
 - Un paiement « En attente » peut durer quelques minutes : conseille de patienter et de vérifier le statut dans l'Historique.
@@ -466,7 +466,7 @@ async function askProvider(p: Provider, model: string, messages: unknown[]): Pro
   const j = await res.json().catch(() => null);
   let t = String(j?.choices?.[0]?.message?.content ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
   if (!t) return null;
-  return t.slice(0, 1500);
+  return t.replace(/seb\s?pay/gi, "Kouamépay").slice(0, 1500);
 }
 
 /** Essaie les services dans l'ordre : si l'un refuse ou ne répond pas, le suivant prend le relais. */
@@ -826,7 +826,7 @@ Deno.serve(async (req) => {
           if (t.commission_total != null) patch.my_commission = Number(t.commission_total) - Number(d.fee_amount);
         }
         if (status === "rejected" && t.type === "payout" && !t.external_reference.startsWith("REF-")) {
-          patch.refund_note = "Wallet recrédité automatiquement par SebPay";
+          patch.refund_note = "Wallet recrédité automatiquement";
         }
         const { data: upd } = await db.from(T).update(patch).eq("id", t.id).select().single();
         await afterStatusChange(t.external_reference, status);

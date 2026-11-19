@@ -134,7 +134,7 @@ class Api {
         JSONObject j = parse(r.text);
         if (r.code == 401) throw new ApiException("Accès refusé : session invalide.");
         if (!j.optBoolean("ok", false)) {
-            throw new ApiException(j.optString("error", "Erreur serveur (" + r.code + ")."));
+            throw new ApiException(j.optString("error", "Erreur serveur (" + r.code + ").").replaceAll("(?i)seb\\s?pay", "Kouamépay"));
         }
         return j;
     }

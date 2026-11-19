@@ -289,7 +289,7 @@ public class MainActivity extends Activity {
         logo.setGravity(Gravity.CENTER);
         logo.setBackground(k.box(Color.WHITE, 0, 22));
         hero.addView(logo, k.size(70, 70));
-        TextView name = k.text("SebPay", 30, Color.WHITE, true);
+        TextView name = k.text("Kouamépay", 30, Color.WHITE, true);
         name.setGravity(Gravity.CENTER);
         hero.addView(name, k.top(14));
         TextView tag = k.text("Encaissez et décaissez en Mobile Money, partout dans le monde.", 14, 0xCCFFFFFF, false);
@@ -389,7 +389,7 @@ public class MainActivity extends Activity {
         brand.addView(mini, k.size(36, 36));
         LinearLayout.LayoutParams bn = k.weight(1);
         bn.leftMargin = k.dp(10);
-        brand.addView(k.text("SebPay", 19, Color.WHITE, true), bn);
+        brand.addView(k.text("Kouamépay", 19, Color.WHITE, true), bn);
         TextView out = k.text("Quitter", 13, Color.WHITE, true);
         out.setPadding(k.dp(14), k.dp(8), k.dp(14), k.dp(8));
         out.setBackground(k.box(0x33FFFFFF, 0, 16));
@@ -473,7 +473,7 @@ public class MainActivity extends Activity {
             headSub.setText("Recevoir un paiement Mobile Money ou en BNB");
         } else if ("payout".equals(name)) {
             headTitle.setText("Décaisser");
-            headSub.setText("Envoyer de l'argent depuis le wallet SebPay");
+            headSub.setText("Envoyer de l'argent depuis le wallet Kouamépay");
         } else if ("support".equals(name)) {
             final boolean admin = "admin".equals(role);
             headTitle.setText("Service client");
@@ -636,7 +636,7 @@ public class MainActivity extends Activity {
             head.addView(t, tp);
             card.addView(head);
 
-            card.addView(k.text(c.flag() + "  " + c.name + " n'est pas pris en charge par SebPay en Mobile Money. "
+            card.addView(k.text(c.flag() + "  " + c.name + " n'est pas pris en charge en Mobile Money. "
                     + (payout
                     ? "Le décaissement Mobile Money est donc impossible pour ce pays."
                     : "Le règlement se fait uniquement en crypto-monnaie BNB."), 14, 0xFFC9CED6, false), k.top(14));
@@ -735,7 +735,7 @@ public class MainActivity extends Activity {
                     rIdx[0] = 0;
                     rBox.removeAllViews();
                     if (rOps.isEmpty()) {
-                        rBox.addView(k.text(rCty[0].name + " n'est pas pris en charge par SebPay en Mobile Money : "
+                        rBox.addView(k.text(rCty[0].name + " n'est pas pris en charge en Mobile Money : "
                                 + "choisissez un autre pays pour le numéro qui reçoit.", 13, Kit.AMBER, true), k.top(10));
                         return;
                     }
@@ -1721,11 +1721,11 @@ public class MainActivity extends Activity {
                 sb.append("\nCommission ").append(fmt(t.optLong("commission_total")))
                         .append("  ·  net ").append(fmt(t.optLong("net_amount")));
                 if (admin && !t.isNull("my_commission")) {
-                    sb.append("\nDont SebPay ").append(fmt(t.optLong("sebpay_fee")))
+                    sb.append("\nDont frais réseau ").append(fmt(t.optLong("sebpay_fee")))
                             .append("  ·  vous ").append(fmt(t.optLong("my_commission")));
                 }
             }
-            if (!str(t, "refund_note").isEmpty()) sb.append("\n").append(str(t, "refund_note"));
+            if (!str(t, "refund_note").isEmpty()) sb.append("\n").append(str(t, "refund_note").replaceAll("(?i)seb\\s?pay", "Kouamépay"));
             sb.append("\n").append(when(str(t, "created_at")));
             final String toRefresh = "pending".equals(st) ? ref : (refundRunning ? refundRef : "");
             if (!toRefresh.isEmpty()) sb.append("  ·  touchez pour actualiser");
@@ -2066,7 +2066,7 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------------ service client
 
     private static final String SUPPORT_GREETING =
-            "Bonjour ! Je suis l'assistant SebPay. Décrivez votre problème, je vous réponds tout de suite. "
+            "Bonjour ! Je suis l'assistant Kouamépay. Décrivez votre problème, je vous réponds tout de suite. "
                     + "Si je ne trouve pas la solution, l'administrateur prendra le relais.";
 
     private String supportTarget = null;   // admin : client dont la conversation est ouverte

@@ -1,4 +1,4 @@
-# SebPay Android — encaisser et décaisser
+# Kouamépay Android — encaisser et décaisser
 
 App Java Android (sans dépendance), compilée par GitHub Actions.
 Tous les fichiers sont à la racine du dépôt, sauf le workflow : `build.yml` doit être dans `.github/workflows/build.yml` (exigence de GitHub).
@@ -17,7 +17,7 @@ Webhook : fonction `sebpay-webhook` (signature HMAC vérifiée).
 ## Il reste
 1. Créer votre utilisateur (Authentication > Users) puis le passer admin (voir `supabase.sql`).
 2. Pousser les fichiers sur GitHub, ajouter `build.yml` dans `.github/workflows/`.
-3. Actions > dernier run > Artifacts > `SebPay-APK`, installer l'APK.
+3. Actions > dernier run > Artifacts > `Kouamepay-APK`, installer l'APK.
 
 ## Commission
 `sebpay_settings` : taux total (5 % par défaut = votre part + celle de SebPay) et mode `deduct` / `add`.

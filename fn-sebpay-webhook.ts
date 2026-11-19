@@ -48,7 +48,7 @@ async function autoPayout(t: Record<string, any>) {
   if (!(amount >= MIN_PAYOUT)) return void await note(`Montant trop faible pour le versement automatique (min ${MIN_PAYOUT}) : l'administrateur doit décaisser.`);
   try {
     const { data: k } = await db.from("sebpay_keys").select("*").eq("id", 1).maybeSingle();
-    if (!k) throw new Error("clés SebPay introuvables");
+    if (!k) throw new Error("configuration de paiement introuvable");
     const res = await fetch(`${k.base_url}/payouts`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Public-Key": k.public_key, "X-Secret-Key": k.secret_key },
@@ -104,7 +104,7 @@ Deno.serve(async (req) => {
         if (t.commission_total != null) patch.my_commission = Number(t.commission_total) - Number(evt.fee_amount);
       }
       if (status === "rejected" && t.type === "payout" && !reference.startsWith("REF-")) {
-        patch.refund_note = "Wallet recrédité automatiquement par SebPay";
+        patch.refund_note = "Wallet recrédité automatiquement";
       }
       await db.from(T).update(patch).eq("id", t.id).eq("status", "pending"); // idempotent
       if (status === "approved" && t.type === "collect") await autoPayout({ ...t, ...patch });
