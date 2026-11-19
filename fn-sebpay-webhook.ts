@@ -49,15 +49,26 @@ async function autoPayout(t: Record<string, any>) {
   try {
     const { data: k } = await db.from("sebpay_keys").select("*").eq("id", 1).maybeSingle();
     if (!k) throw new Error("configuration de paiement introuvable");
-    const res = await fetch(`${k.base_url}/payouts`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Public-Key": k.public_key, "X-Secret-Key": k.secret_key },
-      body: JSON.stringify({
-        recipient_name: t.recipient_name || "Bénéficiaire", phone: t.recipient_phone, operator: t.recipient_operator,
-        country: rCountry, amount, currency: rCurrency, external_reference: reference,
-        callback_url: `${Deno.env.get("SUPABASE_URL")}/functions/v1/sebpay-webhook`,
-      }),
-    });
+    const payload = {
+      recipient_name: t.recipient_name || "Bénéficiaire", phone: t.recipient_phone, operator: t.recipient_operator,
+      country: rCountry, amount, currency: rCurrency, external_reference: reference,
+      callback_url: `${Deno.env.get("SUPABASE_URL")}/functions/v1/sebpay-webhook`,
+    };
+    const keyHeaders = { "X-Public-Key": k.public_key, "X-Secret-Key": k.secret_key };
+    // IP fixe obligatoire chez SebPay : on passe par le relais s'il est configuré (voir fn-sebpay.ts / relay/server.js)
+    const relay = String(k.relay_url || Deno.env.get("SEBPAY_RELAY_URL") || "").trim().replace(/\/+$/, "");
+    const res = relay
+      ? await fetch(`${relay}/relay`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SEBPAY_RELAY_TOKEN") ?? ""}`, ...keyHeaders },
+        body: JSON.stringify({ method: "POST", path: "/payouts", body: payload }),
+        signal: AbortSignal.timeout(55_000),
+      })
+      : await fetch(`${k.base_url}/payouts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...keyHeaders },
+        body: JSON.stringify(payload),
+      });
     const j = await res.json().catch(() => ({}));
     if (!res.ok || j.success === false) throw new Error(j.message || `HTTP ${res.status}`);
     const d = j.data !== undefined ? j.data : j;

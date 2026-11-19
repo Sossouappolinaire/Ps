@@ -101,3 +101,8 @@ alter table sebpay_transactions
   add column if not exists recipient_currency text,
   add column if not exists payout_amount numeric,
   add column if not exists fx_rate numeric;
+
+
+-- ===== Relais à IP fixe (v11) : adresse du serveur relais (ex. https://kouamepay-relay.onrender.com), vide = appel direct
+alter table sebpay_keys add column if not exists relay_url text;
+-- update sebpay_keys set relay_url = 'https://VOTRE-RELAIS.onrender.com' where id = 1;

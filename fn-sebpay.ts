@@ -240,7 +240,7 @@ class SebpayError extends Error {
   }
 }
 
-type Keys = { base_url: string; public_key: string; secret_key: string };
+type Keys = { base_url: string; public_key: string; secret_key: string; relay_url?: string | null };
 
 async function loadKeys(): Promise<Keys> {
   const { data, error } = await db.from("sebpay_keys").select("*").eq("id", 1).maybeSingle();
@@ -248,19 +248,53 @@ async function loadKeys(): Promise<Keys> {
   return data as Keys;
 }
 
+// Les fonctions Edge n'ont PAS d'adresse IP fixe : SebPay (qui n'accepte que des IP autorisées) les refuse.
+// Solution : passer par un petit relais à IP fixe (voir relay/server.js, hébergé sur Render, dont la plage
+// 74.220.x.x est déjà autorisée chez SebPay). L'adresse du relais est dans sebpay_keys.relay_url (ou le secret SEBPAY_RELAY_URL).
+const RELAY_TOKEN = Deno.env.get("SEBPAY_RELAY_TOKEN") ?? ""; // facultatif
+
 async function sebpay(keys: Keys, method: string, path: string, body?: unknown) {
-  const res = await fetch(`${keys.base_url}${path}`, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      "X-Public-Key": keys.public_key,
-      "X-Secret-Key": keys.secret_key,
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  const RELAY_URL = String(keys.relay_url || Deno.env.get("SEBPAY_RELAY_URL") || "").trim().replace(/\/+$/, "");
+  const authHeaders = { "X-Public-Key": keys.public_key, "X-Secret-Key": keys.secret_key };
+  const res = RELAY_URL
+    ? await fetch(`${RELAY_URL}/relay`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${RELAY_TOKEN}`, ...authHeaders },
+      body: JSON.stringify({ method, path, body: body ?? null }),
+      signal: AbortSignal.timeout(55_000), // Render gratuit : le premier appel peut réveiller le service (~30 s)
+    })
+    : await fetch(`${keys.base_url}${path}`, {
+      method,
+      headers: { "Content-Type": "application/json", ...authHeaders },
+      body: body ? JSON.stringify(body) : undefined,
+    });
   const j = await res.json().catch(() => ({}));
-  if (!res.ok || j.success === false) throw new SebpayError(String(j.message || `Erreur de paiement (HTTP ${res.status})`).replace(/seb\s?pay/gi, "Kouamépay"), res.status);
+  if (!res.ok || j.success === false) {
+    let msg = String(j.message || j.error || `Erreur de paiement (HTTP ${res.status})`).replace(/seb\s?pay/gi, "Kouamépay");
+    if (/adresse\s+ip|ip address|not authorized|non autoris/i.test(msg) && /ip/i.test(msg)) {
+      if (RELAY_URL) {
+        msg += " — l'IP du relais n'est pas autorisée : ajoutez sa plage (voir /ip du relais) dans « Adresses IP autorisées ».";
+      } else {
+        // Sans relais : on indique l'adresse vue par SebPay (elle change d'un appel à l'autre, d'où le relais).
+        const ip = await serverIp();
+        if (ip) msg += ` — IP de ce serveur : ${ip} (non fixe : renseignez sebpay_keys.relay_url)`;
+      }
+    }
+    throw new SebpayError(msg, res.status);
+  }
   return j.data !== undefined ? j.data : j;
+}
+
+/** Adresse IP publique avec laquelle cette fonction sort sur internet (celle que SebPay voit). */
+async function serverIp(): Promise<string> {
+  for (const url of ["https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"]) {
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      const t = (await r.text()).trim();
+      if (/^[0-9a-fA-F:.]{7,45}$/.test(t)) return t;
+    } catch (_) { /* on essaie le service suivant */ }
+  }
+  return "";
 }
 
 // ---- CryptAPI : paiements BNB pour les pays que SebPay n'accepte pas.
@@ -857,6 +891,13 @@ Deno.serve(async (req) => {
 
 
       // ---------------- Service client
+      case "myip": {
+        if (!isAdmin) return fail("Réservé à l'administrateur.");
+        const seen = new Set<string>();
+        for (let i = 0; i < 3; i++) { const ip = await serverIp(); if (ip) seen.add(ip); }
+        return ok({ ips: [...seen] });
+      }
+
       case "ping": {
         if (isAdmin) await db.from("sebpay_presence").upsert({ id: 1, admin_last_seen: new Date().toISOString() });
         return ok({});
