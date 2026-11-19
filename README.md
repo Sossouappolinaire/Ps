@@ -52,3 +52,10 @@ Votre part = commission totale − frais réels SebPay (visible par l'admin dans
 - Pays acceptés par SebPay : **deux numéros**. Le formulaire « Encaisser » demande le numéro qui paie (débité de son compte Mobile Money) **et** le numéro qui reçoit (réseau, nom du bénéficiaire, numéro). Les deux numéros peuvent être de **pays différents** (ex. Bénin → Côte d'Ivoire) : le réseau du numéro qui reçoit vient de SebPay pour son pays ; si les devises diffèrent, le taux (open.er-api.com, sans clé) est figé à l'encaissement et le reçu l'affiche (Bénin/Côte d'Ivoire : XOF, pas de conversion). Dès que l'encaissement réussit, le net est **versé automatiquement** au numéro qui reçoit (une seule fois, sans réessai automatique pour éviter un double versement). Le reçu, l'Historique et le suivi affichent les deux numéros et l'état du versement.
 - **À faire (v5)** : exécuter aussi la partie « Encaissement Mobile Money avec 2 numéros » de `supabase.sql`, redéployer `sebpay` **et** `sebpay-webhook` (fn-sebpay-webhook.ts).
 - **À faire** : (1) exécuter la partie « Décaissement BNB (v4) » de `supabase.sql` ; (2) redéployer `fn-sebpay.ts` ; (3) republier l'APK.
+
+## Alignement sur la documentation SebPay (v17)
+- Erreurs : le serveur lit `errors.code` et affiche un message clair (FEATURE_DISABLED, ACCOUNT_PAYOUT_DISABLED, INSUFFICIENT_BALANCE, PAYOUTS_LOCKED, AMOUNT_TOO_LOW…).
+- Tests (bouton « Tester » et vérification avant opération) : lecture d'une référence inexistante sur `/collections/{ref}` et `/payouts/{ref}` ; 404 = la route répond, clés/IP/KYC valides. Ils ne détectent pas une fonctionnalité désactivée qui ne se voit qu'au POST.
+- `provider_link` (Wave, Orange…) : l'app ouvre la page de l'opérateur après un encaissement, comme l'exige SebPay.
+- Webhook : répond tout de suite (SebPay exige un 2xx en moins de 10 s) ; le versement automatique continue en arrière-plan.
+- Rappel wallets : `/payouts` débite toujours le wallet de la devise principale du compte ; `/collections` crédite le wallet de la devise du payeur.

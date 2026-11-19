@@ -101,6 +101,27 @@ class Api {
         saveSession(j, email);
     }
 
+    /** Inscription (nom, prénom, email, mot de passe). Retourne true si connecté directement, false si l'email doit d'abord être confirmé. */
+    boolean signUp(String firstName, String lastName, String email, String password) throws Exception {
+        JSONObject data = new JSONObject().put("first_name", firstName).put("last_name", lastName);
+        JSONObject b = new JSONObject().put("email", email).put("password", password).put("data", data);
+        Res r = http("POST", Config.SUPABASE_URL + "/auth/v1/signup", b.toString(), null);
+        JSONObject j = parse(r.text);
+        if (r.code >= 400) {
+            String m = j.optString("msg", j.optString("error_description", j.optString("message", "Inscription impossible.")));
+            String l = m.toLowerCase();
+            if (l.contains("already registered") || l.contains("already been registered")) m = "Un compte existe déjà avec cet email.";
+            else if (l.contains("password") && (l.contains("least") || l.contains("weak"))) m = "Mot de passe trop faible (6 caractères minimum).";
+            else if (l.contains("rate limit")) m = "Trop de tentatives, réessayez dans quelques minutes.";
+            throw new ApiException(m);
+        }
+        if (!j.optString("access_token").isEmpty()) {
+            saveSession(j, email);
+            return true;
+        }
+        return false;
+    }
+
     private void saveSession(JSONObject j, String email) {
         long expires = System.currentTimeMillis() + j.optLong("expires_in", 3600) * 1000L;
         SharedPreferences.Editor e = prefs.edit();
@@ -182,6 +203,24 @@ class Api {
     JSONObject quote(String type, long amount, String country, String recipientCountry) throws Exception {
         return call(new JSONObject().put("action", "quote").put("type", type).put("amount", amount)
                 .put("country", country).put("recipient_country", recipientCountry)).getJSONObject("data");
+    }
+
+    /** Vérifie avant l'encaissement que l'encaissement ET le versement sont possibles (API, serveur, base). Retourne la liste des problèmes (vide = prêt). */
+    JSONArray preflight(String country, String operator, JSONObject rcp) throws Exception {
+        JSONObject p = new JSONObject().put("action", "preflight").put("country", country).put("operator", operator);
+        if (rcp != null) {
+            p.put("recipient_country", rcp.optString("country")).put("recipient_operator", rcp.optString("operator"));
+        }
+        JSONArray a = call(p).getJSONObject("data").optJSONArray("problems");
+        return a != null ? a : new JSONArray();
+    }
+
+    /** Vérifie avant un décaissement que SebPay répond pour ce pays et ce réseau. Retourne la liste des problèmes (vide = prêt). */
+    JSONArray preflightPayout(String country, String operator) throws Exception {
+        JSONObject p = new JSONObject().put("action", "preflight").put("type", "payout")
+                .put("country", country).put("operator", operator);
+        JSONArray a = call(p).getJSONObject("data").optJSONArray("problems");
+        return a != null ? a : new JSONArray();
     }
 
     JSONObject refund(String reference) throws Exception {

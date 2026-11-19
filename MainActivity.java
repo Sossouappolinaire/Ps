@@ -314,6 +314,11 @@ public class MainActivity extends Activity {
         card.addView(pass, k.top(10));
         card.addView(go, k.top(18));
         card.addView(msg.box, k.top(12));
+        TextView toSignup = k.text("Pas de compte ?  S'inscrire", 15, Kit.PRIMARY, true);
+        toSignup.setGravity(Gravity.CENTER);
+        toSignup.setPadding(k.dp(8), k.dp(14), k.dp(8), k.dp(6));
+        toSignup.setOnClickListener(v -> showSignup());
+        card.addView(toSignup, k.top(8));
 
         TextView foot = k.text("Connexion chiffrée · Mobile Money · BNB", 12, Kit.MUTED, false);
         foot.setGravity(Gravity.CENTER);
@@ -338,6 +343,104 @@ public class MainActivity extends Activity {
                     main.post(this::showShell);
                 } catch (Exception e) {
                     if (e instanceof Api.ApiException) api.logout();
+                    main.post(() -> {
+                        msg.err(errMsg(e));
+                        k.busy(go, false);
+                    });
+                }
+            });
+        });
+    }
+
+    // ------------------------------------------------------------------ inscription
+
+    private void showSignup() {
+        stopPolling();
+        root.removeAllViews();
+        ScrollView sv = new ScrollView(this);
+        sv.setFillViewport(true);
+        LinearLayout col = k.vbox();
+
+        LinearLayout hero = k.vbox();
+        hero.setGravity(Gravity.CENTER_HORIZONTAL);
+        hero.setBackground(k.headerGradient(34));
+        hero.setPadding(k.dp(24), k.dp(40), k.dp(24), k.dp(84));
+        TextView back = k.text("←  Retour à l'accueil", 14, Color.WHITE, true);
+        back.setPadding(k.dp(14), k.dp(8), k.dp(14), k.dp(8));
+        back.setBackground(k.box(0x33FFFFFF, 0, 16));
+        back.setOnClickListener(v -> showLogin());
+        hero.addView(back, k.wrap());
+        TextView name = k.text("Créer un compte", 28, Color.WHITE, true);
+        name.setGravity(Gravity.CENTER);
+        hero.addView(name, k.top(22));
+        TextView tag = k.text("Rejoignez Kouamépay en quelques secondes.", 14, 0xCCFFFFFF, false);
+        tag.setGravity(Gravity.CENTER);
+        hero.addView(tag, k.top(6));
+        col.addView(hero, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout card = k.card();
+        card.setPadding(k.dp(20), k.dp(22), k.dp(20), k.dp(22));
+        LinearLayout.LayoutParams cp = k.top(-48);
+        cp.leftMargin = k.dp(16);
+        cp.rightMargin = k.dp(16);
+        col.addView(card, cp);
+
+        card.addView(k.text("Inscription", 22, Kit.TEXT, true));
+        final EditText last = k.field("Nom", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS | InputType.TYPE_TEXT_VARIATION_PERSON_NAME);
+        final EditText first = k.field("Prénom", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS | InputType.TYPE_TEXT_VARIATION_PERSON_NAME);
+        final EditText email = k.field("Adresse email", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        final EditText pass = k.password("Mot de passe (6 caractères minimum)");
+        final StatusBox msg = new StatusBox();
+        final TextView go = k.button("Créer mon compte", Kit.PRIMARY, Color.WHITE);
+        card.addView(last, k.top(18));
+        card.addView(first, k.top(10));
+        card.addView(email, k.top(10));
+        card.addView(pass, k.top(10));
+        card.addView(go, k.top(18));
+        card.addView(msg.box, k.top(12));
+
+        TextView toLogin = k.text("Déjà un compte ?  Connexion", 15, Kit.PRIMARY, true);
+        toLogin.setGravity(Gravity.CENTER);
+        toLogin.setPadding(k.dp(8), k.dp(14), k.dp(8), k.dp(6));
+        toLogin.setOnClickListener(v -> showLogin());
+        card.addView(toLogin, k.top(8));
+
+        sv.addView(col, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        go.setOnClickListener(v -> {
+            final String ln = last.getText().toString().trim();
+            final String fn = first.getText().toString().trim();
+            final String em = email.getText().toString().trim();
+            final String pw = pass.getText().toString();
+            if (ln.isEmpty() || fn.isEmpty() || em.isEmpty() || pw.isEmpty()) {
+                msg.warn("Renseignez le nom, le prénom, l'email et le mot de passe.");
+                return;
+            }
+            if (!android.util.Patterns.EMAIL_ADDRESS.matcher(em).matches()) {
+                msg.warn("Adresse email invalide.");
+                return;
+            }
+            if (pw.length() < 6) {
+                msg.warn("Le mot de passe doit contenir au moins 6 caractères.");
+                return;
+            }
+            k.busy(go, true);
+            msg.loading("Création du compte…");
+            io.execute(() -> {
+                try {
+                    boolean connected = api.signUp(fn, ln, em, pw);
+                    if (connected) {
+                        role = api.me();
+                        main.post(this::showShell);
+                    } else {
+                        main.post(() -> {
+                            toast("Compte créé. Confirmez votre email puis connectez-vous.");
+                            showLogin();
+                        });
+                    }
+                } catch (Exception e) {
+                    if (e instanceof Api.ApiException && api.isLoggedIn()) api.logout();
                     main.post(() -> {
                         msg.err(errMsg(e));
                         k.busy(go, false);
@@ -433,8 +536,7 @@ public class MainActivity extends Activity {
         navKeys.clear();
         navLabels.clear();
         navIcons.clear();
-        addNav(bar, "collect", "Encaisser", Kit.IconView.DOWN);
-        if (admin) addNav(bar, "payout", "Décaisser", Kit.IconView.UP);
+        addNav(bar, "collect", "Encaisser\n+ Décaisser", Kit.IconView.DOWN);
         addNav(bar, "history", "Historique", Kit.IconView.CLOCK);
         addNav(bar, "support", "Service client", Kit.IconView.CHAT);
         root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -464,16 +566,16 @@ public class MainActivity extends Activity {
         tab = name;
         stopPolling();
         for (int i = 0; i < navKeys.size(); i++) {
-            boolean on = navKeys.get(i).equals(name);
+            boolean on = navKeys.get(i).equals(name) || ("payout".equals(name) && "collect".equals(navKeys.get(i)));
             navLabels.get(i).setTextColor(on ? Kit.PRIMARY : Kit.MUTED);
             navIcons.get(i).setColor(on ? Kit.PRIMARY : Kit.MUTED);
         }
         if ("collect".equals(name)) {
-            headTitle.setText("Encaisser");
-            headSub.setText("Recevoir un paiement Mobile Money ou en BNB");
+            headTitle.setText("Encaisser + Décaisser");
+            headSub.setText("Le client paie, le montant est versé automatiquement");
         } else if ("payout".equals(name)) {
-            headTitle.setText("Décaisser");
-            headSub.setText("Envoyer de l'argent depuis le wallet Kouamépay");
+            headTitle.setText("Décaissement manuel");
+            headSub.setText("Secours administrateur : envoyer depuis le wallet");
         } else if ("support".equals(name)) {
             final boolean admin = "admin".equals(role);
             headTitle.setText("Service client");
@@ -491,10 +593,18 @@ public class MainActivity extends Activity {
             showSupport();
         } else {
             content.addView(supportCard(), k.top(0));
-            if ("payout".equals(name)) content.addView(bnbQueue(), k.top(14));
+            final boolean adminUser = "admin".equals(role);
+            if (adminUser) content.addView(bnbQueue(), k.top(14));
             Form f = new Form("payout".equals(name));
             content.addView(f.build(), k.top(14));
             f.selectInitial();
+            if (adminUser) {
+                final boolean manual = "payout".equals(name);
+                TextView sw = k.button(manual ? "← Retour à Encaisser + Décaisser" : "Décaissement manuel (secours administrateur)",
+                        Kit.SURFACE, Kit.PRIMARY);
+                sw.setOnClickListener(v -> showTab(manual ? "collect" : "payout"));
+                content.addView(sw, k.top(18));
+            }
         }
     }
 
@@ -573,6 +683,7 @@ public class MainActivity extends Activity {
         /** Pays accepté par SebPay = SebPay renvoie au moins un réseau. Sinon : BNB uniquement. */
         void applyOps(JSONArray arr) {
             ops.clear();
+            if (!payout) arr = withWave(country.iso, arr); // Wave : lien de paiement, même si SebPay ne le connaît pas
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject o = arr.optJSONObject(i);
                 if (o != null && !str(o, "slug").isEmpty()) ops.add(o);
@@ -639,7 +750,7 @@ public class MainActivity extends Activity {
             card.addView(k.text(c.flag() + "  " + c.name + " n'est pas pris en charge en Mobile Money. "
                     + (payout
                     ? "Le décaissement Mobile Money est donc impossible pour ce pays."
-                    : "Le règlement se fait uniquement en crypto-monnaie BNB."), 14, 0xFFC9CED6, false), k.top(14));
+                    : "Vous payez en crypto-monnaie BNB ; choisissez ci-dessous le pays et le réseau Mobile Money qui recevront l'argent."), 14, 0xFFC9CED6, false), k.top(14));
 
             if (!payout) {
                 LinearLayout slot = k.vbox();
@@ -876,10 +987,66 @@ public class MainActivity extends Activity {
             otp.setVisibility(View.GONE);
             if (!payout) body.addView(otp, k.top(10));
 
+            final TextView test = k.outlineButton(payout ? "Tester le décaissement" : "Tester l'encaissement et le versement", Kit.PRIMARY);
+            body.addView(test, k.top(22));
             final TextView go = k.button(payout ? "Décaisser" : "Encaisser", payout ? Kit.RED : Kit.PRIMARY, Color.WHITE);
-            body.addView(go, k.top(22));
+            body.addView(go, k.top(10));
             final StatusBox status = new StatusBox();
             body.addView(status.box, k.top(12));
+
+            // Bouton « Tester » : vérifie l'encaissement ET le versement (ou le décaissement) sans rien envoyer.
+            test.setOnClickListener(v -> {
+                final JSONObject top = ops.get(opIndex);
+                final String tslug = str(top, "slug");
+                if (!payout && top.optBoolean("wave_link", false)) {
+                    status.warn("Wave fonctionne par lien de paiement : il n'y a pas de test d'API.");
+                    return;
+                }
+                JSONObject trc = null;
+                if (!payout) {
+                    if (rOps.isEmpty()) {
+                        status.warn("Choisissez un pays pris en charge pour le numéro qui reçoit.");
+                        return;
+                    }
+                    try {
+                        JSONObject ro = rOps.get(rIdx[0]);
+                        trc = new JSONObject().put("country", rCty[0].iso).put("operator", str(ro, "slug"));
+                    } catch (Exception ignored) {
+                        status.warn("Numéro qui reçoit invalide.");
+                        return;
+                    }
+                }
+                final JSONObject trcp = trc;
+                k.busy(test, true);
+                status.loading(payout ? "Test du décaissement…" : "Test de l'encaissement et du versement…");
+                io.execute(() -> {
+                    try {
+                        JSONArray problems = payout ? api.preflightPayout(c.iso, tslug) : api.preflight(c.iso, tslug, trcp);
+                        if (problems.length() == 0) {
+                            main.post(() -> {
+                                status.ok(payout ? "Test réussi : le décaissement est disponible. Vous pouvez décaisser."
+                                        : "Test réussi : l'encaissement et le versement sont disponibles. Vous pouvez encaisser.");
+                                k.busy(test, false);
+                            });
+                        } else {
+                            StringBuilder sbt = new StringBuilder(payout ? "Test échoué (décaissement) :" : "Test échoué :");
+                            for (int i = 0; i < problems.length(); i++) sbt.append("\n• ").append(problems.optString(i));
+                            final String msgt = sbt.toString();
+                            main.post(() -> {
+                                status.err(msgt);
+                                k.busy(test, false);
+                            });
+                        }
+                    } catch (Exception e) {
+                        main.post(() -> {
+                            handleError(e, status);
+                            k.busy(test, false);
+                        });
+                    }
+                });
+            });
+            final LinearLayout waveSlot = k.vbox();
+            body.addView(waveSlot, k.top(12));
 
             // sélection du réseau
             final Runnable refreshOp = () -> {
@@ -891,6 +1058,8 @@ public class MainActivity extends Activity {
                 otpHint.setVisibility(need ? View.VISIBLE : View.GONE);
                 otpHint.setText("Cet opérateur exige un code OTP"
                         + (ussd.isEmpty() ? "." : " : le client compose " + ussd + " pour le recevoir."));
+                waveSlot.removeAllViews();
+                go.setText(!payout && o.optBoolean("wave_link", false) ? "Générer le lien Wave" : (payout ? "Décaisser" : "Encaisser"));
             };
             for (int i = 0; i < chips.length; i++) {
                 final int idx = i;
@@ -915,6 +1084,14 @@ public class MainActivity extends Activity {
                     amt = 0;
                 }
                 final long value = amt;
+                if (!payout && op.optBoolean("wave_link", false)) {
+                    if (value <= 0) {
+                        status.warn("Saisissez un montant valide.");
+                        return;
+                    }
+                    showWaveLink(waveSlot, status, c, value);
+                    return;
+                }
                 if (payout && name.isEmpty()) {
                     status.warn("Saisissez le nom du bénéficiaire.");
                     return;
@@ -960,9 +1137,20 @@ public class MainActivity extends Activity {
                 }
 
                 k.busy(go, true);
-                status.loading("Calcul de la commission…");
+                status.loading(payout ? "Vérification du décaissement…" : "Vérification de l'encaissement et du versement…");
                 io.execute(() -> {
                     try {
+                        JSONArray problems = payout ? api.preflightPayout(c.iso, slug) : api.preflight(c.iso, slug, rcp);
+                        if (problems.length() > 0) {
+                            StringBuilder sbp = new StringBuilder(payout ? "Impossible de décaisser pour le moment :" : "Impossible d'encaisser pour le moment :");
+                            for (int i = 0; i < problems.length(); i++) sbp.append("\n• ").append(problems.optString(i));
+                            final String msgp = sbp.toString();
+                            main.post(() -> {
+                                status.err(msgp);
+                                k.busy(go, false);
+                            });
+                            return;
+                        }
                         final JSONObject qt = (!payout && rcp != null)
                                 ? api.quote("collect", value, c.iso, rcp.optString("country"))
                                 : api.quote(payout ? "payout" : "collect", value);
@@ -980,6 +1168,73 @@ public class MainActivity extends Activity {
                 });
             });
         }
+    }
+
+    // ------------------------------------------------------------------ Wave (réseau absent de SebPay : lien de paiement)
+
+    /** Ajoute « Wave » à la liste des réseaux d'un pays où Wave existe, si SebPay ne le renvoie pas déjà. */
+    private static JSONArray withWave(String iso, JSONArray arr) {
+        if (!Config.WAVE_COUNTRIES.contains(iso)) return arr;
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject o = arr.optJSONObject(i);
+            if (o == null) continue;
+            String id = (str(o, "slug") + " " + str(o, "name")).toLowerCase(Locale.ROOT);
+            if (id.contains("wave")) return arr;
+        }
+        JSONArray out = new JSONArray();
+        for (int i = 0; i < arr.length(); i++) out.put(arr.opt(i));
+        try {
+            out.put(new JSONObject().put("slug", "wave").put("name", "Wave").put("wave_link", true));
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+
+    /** Affiche le lien Wave du pays avec le montant : ouvrir, copier ou partager. */
+    private void showWaveLink(LinearLayout slot, StatusBox status, Countries.Country c, long amount) {
+        slot.removeAllViews();
+        final String url = Config.waveUrl(c.iso, amount);
+        if (url == null) {
+            status.warn("Aucun lien Wave configuré pour " + c.name + " (Config.WAVE_LINKS).");
+            return;
+        }
+        status.hide();
+        LinearLayout card = k.vbox();
+        card.setPadding(k.dp(16), k.dp(16), k.dp(16), k.dp(16));
+        card.setBackground(k.box(Kit.PRIMARY_SOFT, 0, 14));
+        card.addView(k.text("Paiement Wave · " + group(String.valueOf(amount), " ") + " " + c.currency, 16, Kit.TEXT, true));
+        card.addView(k.text("Le client ouvre ce lien dans Wave, vérifie le montant et confirme. "
+                + "Vérifiez la réception dans votre compte Wave Business : le versement au bénéficiaire se fait ensuite à la main.",
+                13, Kit.MUTED, false), k.top(6));
+        TextView link = k.text(url, 12.5f, Kit.PRIMARY, false);
+        link.setPadding(k.dp(12), k.dp(10), k.dp(12), k.dp(10));
+        link.setBackground(k.box(Kit.SURFACE, Kit.BORDER, 12));
+        card.addView(link, k.top(10));
+        TextView open = k.button("Ouvrir dans Wave", Kit.PRIMARY, Color.WHITE);
+        TextView copyB = k.outlineButton("Copier le lien", Kit.PRIMARY);
+        TextView share = k.outlineButton("Envoyer au client", Kit.PRIMARY);
+        card.addView(open, k.top(12));
+        card.addView(copyB, k.top(8));
+        card.addView(share, k.top(8));
+        open.setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+            } catch (ActivityNotFoundException e) {
+                copy("Lien Wave", url);
+                toast("Aucune application pour ouvrir le lien : il a été copié.");
+            }
+        });
+        copyB.setOnClickListener(v -> {
+            copy("Lien Wave", url);
+            toast("Lien copié.");
+        });
+        share.setOnClickListener(v -> {
+            Intent i = new Intent(Intent.ACTION_SEND);
+            i.setType("text/plain");
+            i.putExtra(Intent.EXTRA_TEXT, "Payez " + group(String.valueOf(amount), " ") + " " + c.currency + " avec Wave : " + url);
+            startActivity(Intent.createChooser(i, "Envoyer le lien Wave"));
+        });
+        slot.addView(card, k.top(0));
     }
 
     // ------------------------------------------------------------------ sélecteur de pays (tous les pays du monde)
@@ -1116,21 +1371,46 @@ public class MainActivity extends Activity {
         return l;
     }
 
-    /** Étape 1 : montant en USD, réseau et numéro qui recevront l'argent, puis adresse unique chez CryptAPI. */
-    private void cryptoForm(final LinearLayout slot, final Countries.Country c) {
+    /** Étape 1 : montant en USD, pays + réseau + numéro qui recevront l'argent, puis adresse unique chez CryptAPI. */
+    private void cryptoForm(final LinearLayout slot, final Countries.Country payerCountry) {
         slot.removeAllViews();
+        // Le pays qui reçoit l'argent est choisi ici (indépendant du pays du payeur) : il doit avoir du Mobile Money.
+        Countries.Country saved = Countries.byIso(getSharedPreferences(PREFS_UI, MODE_PRIVATE).getString("crypto_rcountry", "BJ"));
+        final Countries.Country[] rc = {saved != null ? saved : Countries.FEATURED.get(0)};
+        final String[] chosenNet = {""};
+        final List<JSONObject> rOps = new ArrayList<>();
+
         slot.addView(darkLabel("MONTANT À PAYER (USD)"), k.top(20));
         final EditText amt = darkField("Ex. 25", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
         slot.addView(amt, k.top(8));
 
-        slot.addView(darkLabel("RÉSEAU QUI REÇOIT L'ARGENT"), k.top(18));
-        final EditText net = darkField("Ex. MTN, Orange Money, Moov",
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
-        slot.addView(net, k.top(8));
+        // ---- pays qui reçoit l'argent
+        slot.addView(darkLabel("PAYS QUI REÇOIT L'ARGENT"), k.top(18));
+        LinearLayout sel = k.hbox();
+        sel.setGravity(Gravity.CENTER_VERTICAL);
+        sel.setPadding(k.dp(14), k.dp(12), k.dp(14), k.dp(12));
+        sel.setBackground(k.box(Kit.BNB_PANEL, 0, 12));
+        final TextView rFlag = k.text("", 24, Color.WHITE, false);
+        sel.addView(rFlag, new LinearLayout.LayoutParams(k.dp(40), ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout mid = k.vbox();
+        final TextView rName = k.text("", 15.5f, Color.WHITE, true);
+        final TextView rSub = k.text("", 12.5f, 0xFF9AA1AD, false);
+        mid.addView(rName);
+        mid.addView(rSub);
+        sel.addView(mid, k.weight(1));
+        sel.addView(k.icon(Kit.IconView.CHEVRON, 20, 0xFF9AA1AD), k.size(20, 20));
+        slot.addView(sel, k.top(8));
 
-        slot.addView(darkLabel("NUMÉRO QUI REÇOIT L'ARGENT  ·  " + c.flag() + " " + c.name), k.top(18));
+        // ---- réseau qui reçoit l'argent (liste du pays choisi)
+        slot.addView(darkLabel("RÉSEAU QUI REÇOIT L'ARGENT"), k.top(18));
+        final LinearLayout netBox = k.vbox();
+        slot.addView(netBox, k.top(8));
+
+        // ---- numéro qui reçoit l'argent
+        final TextView phoneLabel = darkLabel("");
+        slot.addView(phoneLabel, k.top(18));
         LinearLayout phoneRow = k.hbox();
-        TextView prefix = k.text("+" + c.dial, 16, Color.WHITE, true);
+        final TextView prefix = k.text("", 16, Color.WHITE, true);
         prefix.setGravity(Gravity.CENTER);
         prefix.setPadding(k.dp(14), 0, k.dp(14), 0);
         prefix.setBackground(k.box(Kit.BNB_PANEL, 0, 12));
@@ -1145,6 +1425,99 @@ public class MainActivity extends Activity {
         slot.addView(go, k.top(18));
         final StatusBox st = new StatusBox();
         slot.addView(st.box, k.top(12));
+
+        // Affiche la liste des réseaux (boutons) ; zone de saisie libre si le pays n'a aucun réseau listé.
+        final java.util.function.Consumer<JSONArray> renderNets = arr0 -> {
+            JSONArray arr = arr0;
+            netBox.removeAllViews();
+            rOps.clear();
+            chosenNet[0] = "";
+            arr = withWave(rc[0].iso, arr);
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o != null && !str(o, "slug").isEmpty()) rOps.add(o);
+            }
+            if (rOps.isEmpty()) {
+                final EditText net = darkField("Nom du réseau (ex. MTN, Orange Money, Moov)",
+                        InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+                net.addTextChangedListener(new TextWatcher() {
+                    @Override public void beforeTextChanged(CharSequence s, int a, int b, int n) { }
+                    @Override public void onTextChanged(CharSequence s, int a, int b, int n) { }
+                    @Override public void afterTextChanged(Editable e) { chosenNet[0] = e.toString().trim(); }
+                });
+                netBox.addView(net);
+                return;
+            }
+            HorizontalScrollView hs = new HorizontalScrollView(MainActivity.this);
+            hs.setHorizontalScrollBarEnabled(false);
+            LinearLayout row = k.hbox();
+            hs.addView(row);
+            final TextView[] chips = new TextView[rOps.size()];
+            for (int i = 0; i < rOps.size(); i++) {
+                final JSONObject o = rOps.get(i);
+                final String label = str(o, "name").isEmpty() ? str(o, "slug") : str(o, "name");
+                chips[i] = k.text(label, 14, Kit.BNB_DARK, true);
+                chips[i].setPadding(k.dp(16), k.dp(10), k.dp(16), k.dp(10));
+                LinearLayout.LayoutParams cp = k.wrap();
+                cp.rightMargin = k.dp(8);
+                row.addView(chips[i], cp);
+            }
+            final Runnable paint = () -> {
+                for (int i = 0; i < chips.length; i++) {
+                    boolean on = chips[i].getText().toString().equals(chosenNet[0]);
+                    chips[i].setTextColor(on ? Kit.BNB_DARK : Color.WHITE);
+                    chips[i].setBackground(k.box(on ? Kit.BNB : Kit.BNB_PANEL, 0, 22));
+                }
+            };
+            for (final TextView ch : chips) {
+                ch.setOnClickListener(v -> {
+                    chosenNet[0] = ch.getText().toString();
+                    paint.run();
+                });
+            }
+            chosenNet[0] = chips[0].getText().toString();
+            paint.run();
+            netBox.addView(hs);
+        };
+
+        final Runnable[] reload = new Runnable[1];
+        reload[0] = () -> {
+            final Countries.Country r0 = rc[0];
+            getSharedPreferences(PREFS_UI, MODE_PRIVATE).edit().putString("crypto_rcountry", r0.iso).apply();
+            rFlag.setText(r0.flag());
+            rName.setText(r0.name);
+            rSub.setText("+" + r0.dial + "  ·  " + r0.currency);
+            prefix.setText("+" + r0.dial);
+            phoneLabel.setText("NUMÉRO QUI REÇOIT L'ARGENT  ·  " + r0.flag() + " " + r0.name);
+            JSONArray cached = opsCache.get(r0.iso);
+            if (cached != null) {
+                renderNets.accept(cached);
+                return;
+            }
+            netBox.removeAllViews();
+            netBox.addView(k.text("Recherche des réseaux disponibles…", 13.5f, 0xFF9AA1AD, false));
+            io.execute(() -> {
+                try {
+                    final JSONArray arr = api.operators(r0.iso);
+                    main.post(() -> {
+                        if (rc[0] != r0) return;
+                        opsCache.put(r0.iso, arr);
+                        renderNets.accept(arr);
+                    });
+                } catch (Exception e) {
+                    main.post(() -> {
+                        if (rc[0] != r0) return;
+                        renderNets.accept(new JSONArray()); // saisie libre en secours
+                    });
+                }
+            });
+        };
+        sel.setOnClickListener(v -> pickCountry(rc[0], picked -> {
+            rc[0] = picked;
+            reload[0].run();
+        }));
+        reload[0].run();
+
         go.setOnClickListener(v -> {
             double usd;
             try {
@@ -1156,9 +1529,9 @@ public class MainActivity extends Activity {
                 st.warn("Saisissez un montant d'au moins 1 USD.");
                 return;
             }
-            final String network = net.getText().toString().trim();
+            final String network = chosenNet[0].trim();
             if (network.isEmpty()) {
-                st.warn("Indiquez le réseau qui recevra l'argent.");
+                st.warn("Choisissez le réseau qui recevra l'argent.");
                 return;
             }
             final String number = phone.getText().toString().trim();
@@ -1167,12 +1540,14 @@ public class MainActivity extends Activity {
                 return;
             }
             final double value = usd;
+            final Countries.Country dest = rc[0];
             k.busy(go, true);
             st.loading("Création de l'adresse de paiement…");
             io.execute(() -> {
                 try {
-                    final JSONObject d = api.cryptoCreate(value, c.iso, network, number);
-                    main.post(() -> cryptoResult(slot, c, d));
+                    // « country » = pays du bénéficiaire : sert à valider le numéro côté serveur.
+                    final JSONObject d = api.cryptoCreate(value, dest.iso, network, number);
+                    main.post(() -> cryptoResult(slot, payerCountry, d));
                 } catch (Exception e) {
                     main.post(() -> {
                         handleError(e, st);
@@ -1531,10 +1906,20 @@ public class MainActivity extends Activity {
                             ? api.payout(c.iso, slug, ph, who, value)
                             : api.collect(c.iso, slug, ph, value, code, rcp);
                     final String ref = t.getString("external_reference");
+                    final String link = t.isNull("provider_link") ? "" : t.optString("provider_link", "");
                     main.post(() -> {
                         status.loading(payout
                                 ? "Décaissement lancé, en attente de confirmation…"
-                                : "Demande envoyée : le client doit valider sur son téléphone…");
+                                : (link.isEmpty() ? "Demande envoyée : le client doit valider sur son téléphone…"
+                                : "Finalisez le paiement dans la page de l'opérateur qui s'ouvre (Wave, Orange…)…"));
+                        if (!payout && !link.isEmpty()) {
+                            try {
+                                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(link)));
+                            } catch (ActivityNotFoundException ex) {
+                                copy("Lien de paiement", link);
+                                toast("Aucune application pour ouvrir le lien : il a été copié.");
+                            }
+                        }
                         startPolling(ref, status, go, payout);
                     });
                 } catch (Exception e) {

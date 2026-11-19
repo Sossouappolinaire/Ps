@@ -235,8 +235,36 @@ const ok = (data: unknown) => reply({ ok: true, data });
 const fail = (error: string) => reply({ ok: false, error });
 
 class SebpayError extends Error {
-  constructor(message: string, public status: number) {
+  constructor(message: string, public status: number, public code?: string) {
     super(message);
+  }
+}
+
+// Codes d'erreur documentés par SebPay (errors.code) -> message clair en français.
+const BLOCKING_CODES = new Set([
+  "FEATURE_DISABLED", "COUNTRY_UNAVAILABLE", "OPERATOR_MAINTENANCE", "AGGREGATOR_MAINTENANCE",
+  "ACCOUNT_PAYIN_DISABLED", "ACCOUNT_PAYOUT_DISABLED", "ACCOUNT_SUSPENDED", "KYC_REQUIRED", "WRONG_ENVIRONMENT",
+  "IP_NOT_ALLOWED", "IP_PENDING_APPROVAL", "IP_REJECTED", "IP_DISABLED", "PAYOUTS_LOCKED", "PAYOUTS_FROZEN",
+]);
+function friendlyError(code: string | undefined, errors: Record<string, unknown> | undefined): string | null {
+  switch (code) {
+    case "FEATURE_DISABLED": case "COUNTRY_UNAVAILABLE": case "OPERATOR_MAINTENANCE": case "AGGREGATOR_MAINTENANCE":
+      return "Service, pays ou réseau temporairement indisponible chez le fournisseur : réessayez plus tard ou choisissez un autre réseau.";
+    case "ACCOUNT_PAYOUT_DISABLED": return "Les décaissements ne sont pas autorisés sur ce compte pour ce pays : contactez le support SebPay.";
+    case "ACCOUNT_PAYIN_DISABLED": return "Les encaissements ne sont pas autorisés sur ce compte pour ce pays : contactez le support SebPay.";
+    case "INSUFFICIENT_BALANCE": return "Solde insuffisant sur le wallet principal pour ce décaissement.";
+    case "PAYOUTS_LOCKED": return `Décaissements bloqués après 5 refus d'affilée${errors?.blocked_until ? ` jusqu'à ${errors.blocked_until}` : " jusqu'à la fin de la journée"}.`;
+    case "PAYOUTS_FROZEN": return "Décaissements suspendus le temps d'une vérification : contactez le support SebPay.";
+    case "ACCOUNT_SUSPENDED": return "Compte SebPay suspendu : contactez le support SebPay.";
+    case "KYC_REQUIRED": return "Le KYC du compte SebPay n'est pas validé (clés live).";
+    case "WRONG_ENVIRONMENT": return "Les clés enregistrées sont de l'autre environnement (test / live).";
+    case "MONTHLY_LIMIT_REACHED": return "Limite mensuelle de réception du compte atteinte : contactez le support SebPay.";
+    case "AMOUNT_TOO_LOW": return `Montant trop faible${errors?.min_amount ? ` : minimum ${errors.min_amount} ${errors.currency ?? ""}` : ""}.`;
+    case "RATE_LIMITED": return "Trop de requêtes : réessayez dans quelques secondes.";
+    case "OTP_REQUIRED": return "Ce réseau exige un code OTP.";
+    case "PAYMENT_DECLINED": return "Paiement refusé par le réseau : vérifiez le numéro et le réseau.";
+    case "PAYOUT_DECLINED": return "Décaissement refusé par le réseau : vérifiez le numéro et le réseau.";
+    default: return null;
   }
 }
 
@@ -270,8 +298,9 @@ async function sebpay(keys: Keys, method: string, path: string, body?: unknown) 
     });
   const j = await res.json().catch(() => ({}));
   if (!res.ok || j.success === false) {
-    let msg = String(j.message || j.error || `Erreur de paiement (HTTP ${res.status})`).replace(/seb\s?pay/gi, "Kouamépay");
-    if (/adresse\s+ip|ip address|not authorized|non autoris/i.test(msg) && /ip/i.test(msg)) {
+    const code: string | undefined = typeof j?.errors?.code === "string" ? j.errors.code : undefined;
+    let msg = friendlyError(code, j?.errors) ?? String(j.message || j.error || `Erreur de paiement (HTTP ${res.status})`).replace(/seb\s?pay/gi, "Kouamépay");
+    if (code?.startsWith("IP_") || (/adresse\s+ip|ip address|not authorized|non autoris/i.test(msg) && /ip/i.test(msg))) {
       if (RELAY_URL) {
         msg += " — l'IP du relais n'est pas autorisée : ajoutez sa plage (voir /ip du relais) dans « Adresses IP autorisées ».";
       } else {
@@ -280,7 +309,7 @@ async function sebpay(keys: Keys, method: string, path: string, body?: unknown) 
         if (ip) msg += ` — IP de ce serveur : ${ip} (non fixe : renseignez sebpay_keys.relay_url)`;
       }
     }
-    throw new SebpayError(msg, res.status);
+    throw new SebpayError(msg, res.status, code);
   }
   return j.data !== undefined ? j.data : j;
 }
@@ -398,7 +427,27 @@ async function autoPayout(t: Record<string, any>) {
     await note(`Versé automatiquement à +${t.recipient_phone}`);
   } catch (e) {
     console.error("auto payout:", e);
-    await note("Versement automatique non confirmé : vérifiez dans l'historique puis décaissez à la main si besoin.");
+    const why = String((e as Error)?.message ?? e).slice(0, 220);
+    await note(e instanceof SebpayError
+      ? `Versement refusé : ${why}`
+      : `Versement automatique non confirmé (${why}) : vérifiez dans l'historique puis décaissez à la main si besoin.`);
+  }
+}
+
+/** Teste que SebPay répond pour une fonctionnalité (encaissement ou décaissement), en lecture seule :
+ *  on lit une référence inexistante (GET /collections/{ref} ou /payouts/{ref}) : 404 = la route répond, les clés, l'IP et le KYC sont bons. */
+async function featureProblem(keys: Keys, path: string, label: string): Promise<string | null> {
+  try {
+    await sebpay(keys, "GET", path);
+    return null;
+  } catch (e) {
+    const msg = String((e as Error).message ?? "").slice(0, 160);
+    if (e instanceof SebpayError) {
+      if (e.status === 404) return null; // attendu : référence de test inconnue
+      if ((e.code && BLOCKING_CODES.has(e.code)) || e.status === 401 || e.status === 403 || e.status >= 500) return `${label} indisponible : ${msg}`;
+      return null; // 400/422/429 : pas une panne de la fonctionnalité
+    }
+    return `${label} indisponible : ${msg}`; // réseau / relais injoignable
   }
 }
 
@@ -714,6 +763,55 @@ Deno.serve(async (req) => {
         return ok({ payout_status: "reported" });
       }
 
+      case "preflight": {
+        // Vérification AVANT toute opération : base de données, clés, API SebPay (encaissement ET décaissement), change.
+        // type "payout" : décaissement seul. Sinon : encaissement + versement automatique au bénéficiaire.
+        const isPayoutCheck = p.type === "payout";
+        const problems: string[] = [];
+        const c = COUNTRIES[String(p.country ?? "")];
+        const rc = COUNTRIES[String(p.recipient_country ?? p.country ?? "")];
+        if (!c) problems.push(isPayoutCheck ? "Pays non supporté." : "Pays du numéro qui paie non supporté.");
+        if (!isPayoutCheck && !rc) problems.push("Pays du numéro qui reçoit non supporté.");
+        const chk = await db.from(T).select("recipient_phone,payout_reference,recipient_country,payout_amount").limit(1);
+        if (chk.error) problems.push("Base de données non à jour : exécutez la partie « v5 » de supabase.sql.");
+        if (c && (isPayoutCheck || rc)) {
+          let keys: Keys | null = null;
+          try { keys = await loadKeys(); } catch (_) { problems.push("Clés de paiement introuvables côté serveur."); }
+          if (keys) {
+            const ops = async (iso: string) => {
+              const d = await sebpay(keys!, "GET", `/operators?country=${iso}`);
+              return (Array.isArray(d) ? d : (d?.operators ?? d?.data ?? [])) as Array<Record<string, unknown>>;
+            };
+            const has = (list: Array<Record<string, unknown>>, slug: unknown) => list.some((o) => String(o.slug) === String(slug));
+            if (isPayoutCheck) {
+              try {
+                const l = await ops(String(p.country));
+                if (!has(l, p.operator)) problems.push("Ce réseau n'est pas accepté pour le décaissement dans ce pays.");
+              } catch (e) { problems.push(`Service de paiement injoignable (décaissement) : ${String((e as Error).message).slice(0, 160)}`); }
+              const pp = await featureProblem(keys, "/payouts/KOUAMEPAY-PREFLIGHT", "Le décaissement");
+              if (pp) problems.push(pp);
+            } else {
+              try {
+                const l = await ops(String(p.country));
+                if (!has(l, p.operator)) problems.push("Le réseau du numéro qui paie n'est pas accepté pour l'encaissement.");
+              } catch (e) { problems.push(`Service de paiement injoignable (encaissement) : ${String((e as Error).message).slice(0, 160)}`); }
+              try {
+                const l = await ops(String(p.recipient_country ?? p.country));
+                if (!has(l, p.recipient_operator)) problems.push("Le réseau du numéro qui reçoit n'est pas accepté pour le versement.");
+              } catch (e) { problems.push(`Service de paiement injoignable (versement) : ${String((e as Error).message).slice(0, 160)}`); }
+              const cp = await featureProblem(keys, "/collections/KOUAMEPAY-PREFLIGHT", "L'encaissement");
+              if (cp) problems.push(cp);
+              const pp = await featureProblem(keys, "/payouts/KOUAMEPAY-PREFLIGHT", "Le versement au bénéficiaire");
+              if (pp) problems.push(pp);
+            }
+          }
+          if (!isPayoutCheck && rc && c.currency !== rc.currency) {
+            try { await fxRate(c.currency, rc.currency); } catch (e) { problems.push(String((e as Error).message)); }
+          }
+        }
+        return ok({ ready: problems.length === 0, problems });
+      }
+
       case "quote": {
         const type = p.type === "payout" ? "payout" : "collect";
         const amount = Math.round(Number(p.amount));
@@ -776,7 +874,8 @@ Deno.serve(async (req) => {
         const { data: ins, error } = await db.from(T).insert(row).select("id").single();
         if (error) console.error("insert transaction:", error.message);
         if (row.status === "approved" && ins) await autoPayout({ ...row, id: ins.id });
-        return ok(row);
+        // provider_link : page de l'opérateur (Wave, Orange…) où le client DOIT valider le paiement (null si validation sur le téléphone).
+        return ok({ ...row, provider_link: d?.provider_link ?? null });
       }
 
       case "payout": {

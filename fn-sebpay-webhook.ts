@@ -81,7 +81,8 @@ async function autoPayout(t: Record<string, any>) {
     await note(`Versé automatiquement à +${t.recipient_phone}`);
   } catch (e) {
     console.error("auto payout:", e);
-    await note("Versement automatique non confirmé : vérifiez dans l'historique puis décaissez à la main si besoin.");
+    const why = String((e as Error)?.message ?? e).slice(0, 220);
+    await note(`Versement automatique non confirmé (${why}) : vérifiez dans l'historique puis décaissez à la main si besoin.`);
   }
 }
 
@@ -118,7 +119,13 @@ Deno.serve(async (req) => {
         patch.refund_note = "Wallet recrédité automatiquement";
       }
       await db.from(T).update(patch).eq("id", t.id).eq("status", "pending"); // idempotent
-      if (status === "approved" && t.type === "collect") await autoPayout({ ...t, ...patch });
+      if (status === "approved" && t.type === "collect") {
+        // SebPay exige une réponse 2xx en moins de 10 s : le versement automatique continue en arrière-plan.
+        const job = autoPayout({ ...t, ...patch });
+        // deno-lint-ignore no-explicit-any
+        const rt = (globalThis as any).EdgeRuntime;
+        if (rt?.waitUntil) rt.waitUntil(job); else await job;
+      }
       if (reference.startsWith("REF-")) {
         if (status === "approved") {
           await db.from(T).update({ status: "refunded", refunded_at: now, refund_note: "Remboursé", updated_at: now })

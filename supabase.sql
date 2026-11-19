@@ -106,3 +106,24 @@ alter table sebpay_transactions
 -- ===== Relais à IP fixe (v11) : adresse du serveur relais (ex. https://kouamepay-relay.onrender.com), vide = appel direct
 alter table sebpay_keys add column if not exists relay_url text;
 -- update sebpay_keys set relay_url = 'https://VOTRE-RELAIS.onrender.com' where id = 1;
+
+-- ===== Inscription dans l'app (v12) : nom, prénom, et création automatique du profil "agent" =====
+alter table sebpay_users add column if not exists first_name text;
+alter table sebpay_users add column if not exists last_name text;
+alter table sebpay_users add column if not exists email text;
+
+create or replace function public.sebpay_handle_new_user() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.sebpay_users (user_id, role, first_name, last_name, email)
+  values (new.id, 'agent', new.raw_user_meta_data->>'first_name', new.raw_user_meta_data->>'last_name', new.email)
+  on conflict (user_id) do nothing;
+  return new;
+end $$;
+
+drop trigger if exists sebpay_on_signup on auth.users;
+create trigger sebpay_on_signup after insert on auth.users
+  for each row execute function public.sebpay_handle_new_user();
+
+-- ===== Relais Render : IP 74.220.48.0/24 autorisée chez SebPay, site https://ma-boutique-ngu0.onrender.com =====
+update sebpay_keys set relay_url = 'https://ma-boutique-ngu0.onrender.com' where id = 1;
