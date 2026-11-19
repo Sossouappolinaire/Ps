@@ -210,7 +210,7 @@ final class Kit {
 
     /** Icônes vectorielles dessinées au trait : pas de dépendance, nettes sur tous les écrans. */
     static final class IconView extends View {
-        static final int DOWN = 0, UP = 1, CLOCK = 2, CHEVRON = 3, CHECK = 4, CROSS = 5, GLOBE = 6, CHAT = 7;
+        static final int DOWN = 0, UP = 1, CLOCK = 2, CHEVRON = 3, CHECK = 4, CROSS = 5, GLOBE = 6, CHAT = 7, USERS = 8;
 
         private final int type;
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -262,6 +262,11 @@ final class Kit {
                 case CHAT:
                     p.addRoundRect(new RectF(w * .14f, h * .16f, w * .86f, h * .68f), w * .12f, w * .12f, Path.Direction.CW);
                     p.moveTo(w * .36f, h * .68f); p.lineTo(w * .3f, h * .88f); p.lineTo(w * .54f, h * .68f);
+                    break;
+                case USERS:
+                    cv.drawCircle(w * .5f, h * .32f, w * .17f, paint);
+                    p.moveTo(w * .2f, h * .88f);
+                    p.cubicTo(w * .2f, h * .56f, w * .8f, h * .56f, w * .8f, h * .88f);
                     break;
                 default: // GLOBE
                     cv.drawCircle(w * .5f, h * .5f, Math.min(w, h) * .4f, paint);

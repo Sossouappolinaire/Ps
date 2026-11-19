@@ -160,8 +160,35 @@ class Api {
         return j;
     }
 
+    private boolean approved = true;
+
     String me() throws Exception {
-        return call(new JSONObject().put("action", "me")).optString("role", "agent");
+        JSONObject j = call(new JSONObject().put("action", "me"));
+        approved = j.optBoolean("approved", true);
+        return j.optString("role", "agent");
+    }
+
+    /** false : inscription pas encore validée par l'administrateur. */
+    boolean isApproved() {
+        return approved;
+    }
+
+    JSONArray usersList() throws Exception {
+        JSONArray a = call(new JSONObject().put("action", "users_list")).optJSONArray("data");
+        return a != null ? a : new JSONArray();
+    }
+
+    JSONArray usersPending() throws Exception {
+        JSONArray a = call(new JSONObject().put("action", "users_pending")).optJSONArray("data");
+        return a != null ? a : new JSONArray();
+    }
+
+    void userApprove(String userId) throws Exception {
+        call(new JSONObject().put("action", "user_approve").put("user_id", userId));
+    }
+
+    void userReject(String userId) throws Exception {
+        call(new JSONObject().put("action", "user_reject").put("user_id", userId));
     }
 
     JSONArray operators(String country) throws Exception {

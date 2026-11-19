@@ -369,6 +369,17 @@ async function usdToBnb(usd: number, ticker: string): Promise<number> {
 }
 
 // ---- Commission : un taux total (la vôtre + celle de SebPay), réglé dans sebpay_settings
+// Un paiement BNB non reçu reste « en attente de paiement » 24 h au maximum.
+const CRYPTO_TTL_MS = 24 * 60 * 60 * 1000;
+function withExpiry<T extends Record<string, unknown>>(r: T) {
+  const created = new Date(String(r.created_at)).getTime();
+  return {
+    ...r,
+    expires_at: new Date(created + CRYPTO_TTL_MS).toISOString(),
+    expired: r.status === "pending" && Date.now() > created + CRYPTO_TTL_MS,
+  };
+}
+
 async function loadSettings() {
   const { data } = await db.from("sebpay_settings").select("*").eq("id", 1).maybeSingle();
   return {
@@ -602,9 +613,21 @@ async function getUser(req: Request) {
   if (!token) return null;
   const { data, error } = await db.auth.getUser(token);
   if (error || !data.user) return null;
-  const { data: prof } = await db.from("sebpay_users").select("role").eq("user_id", data.user.id).maybeSingle();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let prof: any = null;
+  const r1 = await db.from("sebpay_users").select("role,approved").eq("user_id", data.user.id).maybeSingle();
+  if (!r1.error) {
+    prof = r1.data;
+  } else {
+    // colonne « approved » absente (partie v20 de supabase.sql pas encore exécutée) : pas de validation exigée
+    const r2 = await db.from("sebpay_users").select("role").eq("user_id", data.user.id).maybeSingle();
+    prof = r2.data ? { role: r2.data.role, approved: true } : null;
+  }
   if (!prof) return null;
-  return { id: data.user.id as string, role: prof.role as string, email: (data.user.email ?? "") as string };
+  return {
+    id: data.user.id as string, role: prof.role as string, email: (data.user.email ?? "") as string,
+    approved: prof.approved === true, // toute inscription doit être validée par l'administrateur
+  };
 }
 
 Deno.serve(async (req) => {
@@ -612,12 +635,16 @@ Deno.serve(async (req) => {
     const user = await getUser(req);
     if (!user) return fail("Compte non autorisé pour cette application.");
     const p = await req.json();
+    if (!user.approved) {
+      if (p.action === "me") return reply({ ok: true, role: user.role, approved: false });
+      return fail("Inscription en attente de validation par l'administrateur.");
+    }
     const callback = `${SUPABASE_URL}/functions/v1/sebpay-webhook`;
     const isAdmin = user.role === "admin";
 
     switch (p.action) {
       case "me":
-        return reply({ ok: true, role: user.role });
+        return reply({ ok: true, role: user.role, approved: true });
 
       case "operators": {
         if (!COUNTRIES[p.country]) return fail("Pays non supporté.");
@@ -674,7 +701,7 @@ Deno.serve(async (req) => {
         const { data: t } = await db.from(TC).select("*").eq("reference", String(p.reference ?? "")).maybeSingle();
         if (!t || (!isAdmin && t.created_by !== user.id)) return fail("Paiement introuvable.");
         const { token: _t, ...rest } = t; // le jeton du callback ne sort jamais du serveur
-        return ok(rest);
+        return ok(withExpiry(rest));
       }
 
       // ---------------- Décaissement BNB : preuves du client, décaissement manuel par l'administrateur
@@ -683,7 +710,7 @@ Deno.serve(async (req) => {
         if (!isAdmin) q = q.eq("created_by", user.id);
         const { data, error } = await q;
         if (error) return fail("Lecture de l'historique impossible.");
-        return ok((data ?? []).map(({ token: _t, proof_paths, ...r }) => ({
+        return ok((data ?? []).map(({ token: _t, proof_paths, ...r }) => withExpiry({
           ...r, type: "crypto", proof_count: (proof_paths ?? []).length,
         })));
       }
@@ -692,6 +719,7 @@ Deno.serve(async (req) => {
         const { data: t } = await db.from(TC).select("*").eq("reference", String(p.reference ?? "")).maybeSingle();
         if (!t || t.created_by !== user.id) return fail("Paiement introuvable.");
         if (t.payout_status === "paid") return fail("Ce paiement est déjà marqué comme payé.");
+        if (withExpiry(t).expired) return fail("Ce paiement a expiré (24 h sans réception du BNB). Faites un nouveau paiement.");
         const wait = PROOF_DELAY_MS - (Date.now() - new Date(t.created_at).getTime());
         if (wait > 0) return fail(`Les preuves peuvent être envoyées dans ${Math.ceil(wait / 1000)} s.`);
         const images: unknown[] = Array.isArray(p.images) ? p.images : [];
@@ -721,20 +749,26 @@ Deno.serve(async (req) => {
       }
 
       case "crypto_list": {
+        // Tous les paiements crypto à traiter, avec le numéro qui reçoit, dès la création (même avant les preuves).
+        // Les paiements jamais reçus au bout de 24 h disparaissent de la liste.
         if (!isAdmin) return fail("Réservé à l'administrateur.");
-        const { data } = await db.from(TC).select("*").in("payout_status", ["proof_sent", "reported"])
-          .order("proof_sent_at", { ascending: true }).limit(100);
+        const { data } = await db.from(TC).select("*").in("payout_status", ["awaiting", "proof_sent", "reported"])
+          .order("created_at", { ascending: false }).limit(200);
+        const rank: Record<string, number> = { reported: 0, proof_sent: 1, awaiting: 2 };
         const out = [];
         for (const r of data ?? []) {
           const { token: _t, proof_paths, ...rest } = r;
+          const w = withExpiry({ ...rest, type: "crypto" });
+          if (w.expired) continue;
           let proofs: string[] = [];
           if ((proof_paths ?? []).length) {
             const { data: signed } = await db.storage.from(PROOF_BUCKET).createSignedUrls(proof_paths, 3600);
             proofs = (signed ?? []).map((x) => x.signedUrl).filter(Boolean) as string[];
           }
-          out.push({ ...rest, type: "crypto", proofs });
+          out.push({ ...w, proofs });
         }
-        return ok(out);
+        out.sort((x, y) => (rank[String(x.payout_status)] ?? 3) - (rank[String(y.payout_status)] ?? 3));
+        return ok(out.slice(0, 100));
       }
 
       case "crypto_pay": {
@@ -1068,6 +1102,43 @@ Deno.serve(async (req) => {
         if (error || !m) return fail("Envoi impossible, réessayez.");
         await db.from("sebpay_presence").upsert({ id: 1, admin_last_seen: new Date().toISOString() });
         return ok({ message: m });
+      }
+
+      case "users_list": {
+        if (!isAdmin) return fail("Réservé à l'administrateur.");
+        const { data } = await db.from("sebpay_users").select("user_id,email,first_name,last_name,role,approved,created_at")
+          .order("approved", { ascending: true }).order("created_at", { ascending: false }).limit(300);
+        return ok(data ?? []);
+      }
+
+      case "users_pending": {
+        if (!isAdmin) return fail("Réservé à l'administrateur.");
+        const { data } = await db.from("sebpay_users").select("user_id,email,first_name,last_name,created_at")
+          .eq("approved", false).order("created_at", { ascending: true }).limit(100);
+        return ok(data ?? []);
+      }
+
+      case "user_approve": {
+        if (!isAdmin) return fail("Réservé à l'administrateur.");
+        const target = String(p.user_id ?? "");
+        if (!target) return fail("Compte manquant.");
+        const { data: u } = await db.from("sebpay_users").update({ approved: true, approved_at: new Date().toISOString() })
+          .eq("user_id", target).eq("approved", false).select("user_id").maybeSingle();
+        if (!u) return fail("Inscription introuvable ou déjà validée.");
+        // l'administrateur remplace la confirmation par email : le compte peut se connecter tout de suite
+        await db.auth.admin.updateUserById(target, { email_confirm: true });
+        return ok({});
+      }
+
+      case "user_reject": {
+        if (!isAdmin) return fail("Réservé à l'administrateur.");
+        const target = String(p.user_id ?? "");
+        if (!target || target === user.id) return fail("Compte invalide.");
+        // on retire seulement l'accès à Kouamépay : le compte d'authentification est partagé avec d'autres applications
+        const { data: u } = await db.from("sebpay_users").delete().eq("user_id", target).eq("approved", false)
+          .select("user_id").maybeSingle();
+        if (!u) return fail("Inscription introuvable ou déjà validée.");
+        return ok({});
       }
 
       default:

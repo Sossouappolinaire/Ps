@@ -170,6 +170,14 @@ public class MainActivity extends Activity {
         return fmt(t.optLong("amount")) + " " + str(t, "currency");
     }
 
+    /** Temps restant avant l'expiration (24 h) d'un paiement BNB non reçu. */
+    private String leftText(String createdIso) {
+        long left = parseMs(createdIso) + 24L * 3600_000L - System.currentTimeMillis();
+        if (left <= 0) return "expiré";
+        long h = left / 3600_000L, m = (left % 3600_000L) / 60_000L;
+        return h > 0 ? h + " h " + m + " min" : m + " min";
+    }
+
     private String when(String iso) {
         try {
             SimpleDateFormat in = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US);
@@ -435,7 +443,7 @@ public class MainActivity extends Activity {
                         main.post(this::showShell);
                     } else {
                         main.post(() -> {
-                            toast("Compte créé. Confirmez votre email puis connectez-vous.");
+                            toast("Compte créé. L'administrateur doit valider votre inscription, puis connectez-vous.");
                             showLogin();
                         });
                     }
@@ -475,7 +483,42 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ structure principale
 
+    /** Inscription pas encore validée : l'administrateur doit la confirmer. */
+    private void showPending() {
+        stopPolling();
+        stopBeat();
+        root.removeAllViews();
+        LinearLayout col = k.vbox();
+        col.setGravity(Gravity.CENTER);
+        col.setPadding(k.dp(28), k.dp(28), k.dp(28), k.dp(28));
+        TextView logo = k.text("S", 32, Color.WHITE, true);
+        logo.setGravity(Gravity.CENTER);
+        logo.setBackground(k.box(Kit.PRIMARY, 0, 22));
+        col.addView(logo, k.size(70, 70));
+        TextView t = k.text("Inscription en attente", 22, Kit.TEXT, true);
+        t.setGravity(Gravity.CENTER);
+        col.addView(t, k.top(18));
+        TextView s = k.text("Votre compte " + api.getEmail() + " doit être confirmé par l'administrateur. "
+                + "Vous pourrez ensuite utiliser Kouamépay.", 14.5f, Kit.MUTED, false);
+        s.setGravity(Gravity.CENTER);
+        col.addView(s, k.top(8));
+        TextView refresh = k.button("Actualiser", Kit.PRIMARY, Color.WHITE);
+        refresh.setOnClickListener(v -> loadProfile());
+        col.addView(refresh, k.top(22));
+        TextView out = k.outlineButton("Quitter", Kit.MUTED);
+        out.setOnClickListener(v -> {
+            api.logout();
+            showLogin();
+        });
+        col.addView(out, k.top(10));
+        root.addView(col, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
     private void showShell() {
+        if (!api.isApproved()) {
+            showPending();
+            return;
+        }
         stopPolling();
         root.removeAllViews();
         final boolean admin = "admin".equals(role);
@@ -536,14 +579,17 @@ public class MainActivity extends Activity {
         navKeys.clear();
         navLabels.clear();
         navIcons.clear();
-        addNav(bar, "collect", "Encaisser\n+ Décaisser", Kit.IconView.DOWN);
+        addNav(bar, "collect", admin ? "Encaisser" : "Encaisser\n+ Décaisser", Kit.IconView.DOWN);
+        if (admin) addNav(bar, "payout", "Décaisser", Kit.IconView.UP);
         addNav(bar, "history", "Historique", Kit.IconView.CLOCK);
         addNav(bar, "support", "Service client", Kit.IconView.CHAT);
+        if (admin) addNav(bar, "users", "Utilisateurs", Kit.IconView.USERS);
         root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        if ("payout".equals(tab) && !admin) tab = "collect";
+        if (("payout".equals(tab) || "users".equals(tab)) && !admin) tab = "collect";
         startBeat();
         showTab(tab);
+        refreshUsersBadge();
     }
 
     private void addNav(LinearLayout bar, final String key, String label, int iconType) {
@@ -566,7 +612,7 @@ public class MainActivity extends Activity {
         tab = name;
         stopPolling();
         for (int i = 0; i < navKeys.size(); i++) {
-            boolean on = navKeys.get(i).equals(name) || ("payout".equals(name) && "collect".equals(navKeys.get(i)));
+            boolean on = navKeys.get(i).equals(name);
             navLabels.get(i).setTextColor(on ? Kit.PRIMARY : Kit.MUTED);
             navIcons.get(i).setColor(on ? Kit.PRIMARY : Kit.MUTED);
         }
@@ -574,8 +620,11 @@ public class MainActivity extends Activity {
             headTitle.setText("Encaisser + Décaisser");
             headSub.setText("Le client paie, le montant est versé automatiquement");
         } else if ("payout".equals(name)) {
-            headTitle.setText("Décaissement manuel");
-            headSub.setText("Secours administrateur : envoyer depuis le wallet");
+            headTitle.setText("Décaisser");
+            headSub.setText("Payer les clients crypto et envoyer depuis le wallet");
+        } else if ("users".equals(name)) {
+            headTitle.setText("Mes utilisateurs");
+            headSub.setText("Valider les inscriptions de vos clients");
         } else if ("support".equals(name)) {
             final boolean admin = "admin".equals(role);
             headTitle.setText("Service client");
@@ -591,20 +640,16 @@ public class MainActivity extends Activity {
             showHistory();
         } else if ("support".equals(name)) {
             showSupport();
+        } else if ("users".equals(name)) {
+            showUsers();
         } else {
             content.addView(supportCard(), k.top(0));
             final boolean adminUser = "admin".equals(role);
-            if (adminUser) content.addView(bnbQueue(), k.top(14));
+            if ("payout".equals(name) && !adminUser) { showTab("collect"); return; }
+            if ("payout".equals(name)) content.addView(bnbQueue(), k.top(14));
             Form f = new Form("payout".equals(name));
             content.addView(f.build(), k.top(14));
             f.selectInitial();
-            if (adminUser) {
-                final boolean manual = "payout".equals(name);
-                TextView sw = k.button(manual ? "← Retour à Encaisser + Décaisser" : "Décaissement manuel (secours administrateur)",
-                        Kit.SURFACE, Kit.PRIMARY);
-                sw.setOnClickListener(v -> showTab(manual ? "collect" : "payout"));
-                content.addView(sw, k.top(18));
-            }
         }
     }
 
@@ -1600,7 +1645,7 @@ public class MainActivity extends Activity {
         slot.addView(k.text(str(d, "recipient_operator") + "  ·  " + phoneLabel, 15, Color.WHITE, true), k.top(6));
 
         final StatusBox st = new StatusBox();
-        st.loading("En attente du paiement… la confirmation est automatique.");
+        st.loading("En attente de paiement (24 h maximum)… la confirmation est automatique dès que le BNB arrive.");
         slot.addView(st.box, k.top(16));
         slot.addView(proofSection(ref, System.currentTimeMillis(), 0, true, null), k.top(18));
         TextView again = k.text("Nouveau paiement", 14, Kit.BNB, true);
@@ -1635,7 +1680,10 @@ public class MainActivity extends Activity {
                     main.post(() -> {
                         if (poller != self) return;
                         final String po = r != null ? r.optString("payout_status", "awaiting") : "awaiting";
-                        if ("paid".equals(po)) {
+                        if (r != null && r.optBoolean("expired", false)) {
+                            poller = null;
+                            st.warn("Paiement expiré : le BNB n'est pas arrivé en 24 h. Faites un nouveau paiement.");
+                        } else if ("paid".equals(po)) {
                             poller = null;
                             st.ok("Payé : l'argent a été envoyé à " + phoneLabel
                                     + ". S'il n'est pas arrivé, signalez-le depuis l'Historique.");
@@ -2203,8 +2251,12 @@ public class MainActivity extends Activity {
             label = "Paiement reçu";
             fg = Kit.PRIMARY;
             bg = Kit.PRIMARY_SOFT;
+        } else if (t.optBoolean("expired", false)) {
+            label = "Expiré";
+            fg = Kit.MUTED;
+            bg = Kit.BG;
         } else {
-            label = "En attente du paiement";
+            label = "En attente de paiement";
             fg = Kit.AMBER;
             bg = Kit.AMBER_SOFT;
         }
@@ -2241,10 +2293,13 @@ public class MainActivity extends Activity {
             sb.append("\n").append(new BigDecimal(str(t, "expected_bnb")).stripTrailingZeros().toPlainString()).append(" BNB");
         }
         if ("reported".equals(po)) sb.append("\nSignalé : ").append(str(t, "report_note"));
+        if ("pending".equals(pay) && !t.optBoolean("expired", false)) {
+            sb.append("\nExpire dans ").append(leftText(str(t, "created_at"))).append(" (24 h maximum)");
+        }
         sb.append("\n").append(when(str(t, "created_at")));
         card.addView(k.text(sb.toString(), 12.5f, Kit.MUTED, false), k.top(10));
 
-        if (!admin && ("awaiting".equals(po) || "reported".equals(po)) && !"underpaid".equals(pay)) {
+        if (!admin && ("awaiting".equals(po) || "reported".equals(po)) && !"underpaid".equals(pay) && !t.optBoolean("expired", false)) {
             card.addView(proofSection(ref, parseMs(str(t, "created_at")), t.optInt("proof_count", 0), false, null), k.top(12));
         }
         if (!admin && "paid".equals(po)) {
@@ -2317,6 +2372,126 @@ public class MainActivity extends Activity {
         d.show();
     }
 
+    /** Pastille « Utilisateurs (n) » : nombre d'inscriptions à valider. */
+    private void refreshUsersBadge() {
+        if (!"admin".equals(role)) return;
+        io.execute(() -> {
+            try {
+                final int n = api.usersPending().length();
+                main.post(() -> {
+                    int i = navKeys.indexOf("users");
+                    if (i >= 0) navLabels.get(i).setText(n > 0 ? "Utilisateurs (" + n + ")" : "Utilisateurs");
+                });
+            } catch (Exception ignored) {
+                // serveur pas encore à jour ou réseau coupé : pas de pastille
+            }
+        });
+    }
+
+    /** « Mes utilisateurs » : inscriptions à valider, puis tous les comptes. */
+    private void showUsers() {
+        if (!"admin".equals(role)) {
+            showTab("collect");
+            return;
+        }
+        content.addView(k.text("Chargement…", 14, Kit.MUTED, false));
+        io.execute(() -> {
+            try {
+                final JSONArray arr = api.usersList();
+                main.post(() -> {
+                    if (!"users".equals(tab)) return;
+                    content.removeAllViews();
+                    List<JSONObject> pending = new ArrayList<>();
+                    List<JSONObject> all = new ArrayList<>();
+                    for (int i = 0; i < arr.length(); i++) {
+                        JSONObject u = arr.optJSONObject(i);
+                        if (u == null) continue;
+                        if (u.optBoolean("approved", true)) all.add(u);
+                        else pending.add(u);
+                    }
+                    int pi = navKeys.indexOf("users");
+                    if (pi >= 0) navLabels.get(pi).setText(pending.isEmpty() ? "Utilisateurs" : "Utilisateurs (" + pending.size() + ")");
+                    content.addView(k.sectionLabel("Inscriptions à valider (" + pending.size() + ")"));
+                    if (pending.isEmpty()) {
+                        content.addView(k.text("Aucune inscription en attente.", 13.5f, Kit.MUTED, false), k.top(6));
+                    }
+                    for (JSONObject u : pending) content.addView(pendingUserCard(u), k.top(8));
+                    content.addView(k.sectionLabel("Mes utilisateurs (" + all.size() + ")"), k.top(22));
+                    for (JSONObject u : all) content.addView(userCard(u), k.top(8));
+                });
+            } catch (Exception e) {
+                main.post(() -> {
+                    if (!"users".equals(tab)) return;
+                    content.removeAllViews();
+                    content.addView(k.text(errMsg(e), 14, Kit.RED, false));
+                });
+            }
+        });
+    }
+
+    private View userCard(final JSONObject u) {
+        final String name = (str(u, "first_name") + " " + str(u, "last_name")).trim();
+        final boolean admin = "admin".equals(str(u, "role"));
+        LinearLayout card = k.card();
+        card.setPadding(k.dp(14), k.dp(12), k.dp(14), k.dp(12));
+        LinearLayout top = k.hbox();
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(k.text(name.isEmpty() ? str(u, "email") : name, 15, Kit.TEXT, true), k.weight(1));
+        top.addView(admin ? k.pill("Administrateur", Kit.PRIMARY, Kit.PRIMARY_SOFT) : k.pill("Agent", Kit.MUTED, Kit.BG), k.wrap());
+        card.addView(top);
+        card.addView(k.text(str(u, "email") + "\nInscrit le " + when(str(u, "created_at")), 12.5f, Kit.MUTED, false), k.top(4));
+        return card;
+    }
+
+    private View pendingUserCard(final JSONObject u) {
+        final String id = str(u, "user_id");
+        final String name = (str(u, "first_name") + " " + str(u, "last_name")).trim();
+        LinearLayout card = k.card();
+        card.setPadding(k.dp(14), k.dp(14), k.dp(14), k.dp(14));
+        card.addView(k.text(name.isEmpty() ? str(u, "email") : name, 15, Kit.TEXT, true));
+        card.addView(k.text(str(u, "email") + "\nInscrit le " + when(str(u, "created_at")), 12.5f, Kit.MUTED, false), k.top(4));
+        LinearLayout row = k.hbox();
+        final TextView no = k.outlineButton("Refuser", Kit.RED);
+        final TextView yes = k.button("Valider", Kit.PRIMARY, Color.WHITE);
+        LinearLayout.LayoutParams np = k.weight(1);
+        np.rightMargin = k.dp(8);
+        row.addView(no, np);
+        row.addView(yes, k.weight(1));
+        card.addView(row, k.top(12));
+        yes.setOnClickListener(v -> {
+            k.busy(yes, true);
+            io.execute(() -> {
+                try {
+                    api.userApprove(id);
+                    main.post(() -> {
+                        toast("Inscription validée.");
+                        if ("users".equals(tab)) showTab("users");
+                    });
+                } catch (Exception e) {
+                    main.post(() -> {
+                        k.busy(yes, false);
+                        handleError(e, null);
+                    });
+                }
+            });
+        });
+        no.setOnClickListener(v -> confirmSheet("Refuser cette inscription ?",
+                "Le compte " + str(u, "email") + " n'aura pas accès à Kouamépay.", "Refuser", Kit.RED, () -> {
+                    io.execute(() -> {
+                        try {
+                            api.userReject(id);
+                            main.post(() -> {
+                                toast("Inscription refusée.");
+                                if ("users".equals(tab)) showTab("users");
+                            });
+                        } catch (Exception e) {
+                            main.post(() -> handleError(e, null));
+                        }
+                    });
+                }));
+        return card;
+    }
+
     /** Liste des décaissements BNB à traiter : pays, réseau, numéro, preuves, bouton « Décaisser ». */
     private View bnbQueue() {
         final LinearLayout wrap = k.vbox();
@@ -2325,8 +2500,12 @@ public class MainActivity extends Activity {
             try {
                 final JSONArray arr = api.cryptoList();
                 main.post(() -> {
-                    if (!"payout".equals(tab) || arr.length() == 0) return;
-                    wrap.addView(k.sectionLabel("Décaissements BNB à traiter (" + arr.length() + ")"));
+                    if (!"payout".equals(tab)) return;
+                    if (arr.length() == 0) {
+                        wrap.addView(k.text("Aucun paiement crypto en attente.", 13.5f, Kit.MUTED, false));
+                        return;
+                    }
+                    wrap.addView(k.sectionLabel("Paiements crypto à traiter (" + arr.length() + ")"));
                     for (int i = 0; i < arr.length(); i++) {
                         JSONObject t = arr.optJSONObject(i);
                         if (t != null) wrap.addView(bnbQueueCard(t), k.top(8));
@@ -2357,8 +2536,10 @@ public class MainActivity extends Activity {
         sb.append("Réseau : ").append(str(t, "recipient_operator"));
         sb.append("\nNuméro : +").append(phone);
         sb.append("\nPaiement BNB : ").append("approved".equals(pay) ? "reçu et confirmé"
-                : "underpaid".equals(pay) ? "montant insuffisant" : "pas encore confirmé");
-        sb.append("\nPreuves reçues le ").append(when(str(t, "proof_sent_at")));
+                : "underpaid".equals(pay) ? "montant insuffisant"
+                : "en attente de paiement (expire dans " + leftText(str(t, "created_at")) + ")");
+        if (str(t, "proof_sent_at").isEmpty()) sb.append("\nPreuves : pas encore envoyées");
+        else sb.append("\nPreuves reçues le ").append(when(str(t, "proof_sent_at")));
         card.addView(k.text(sb.toString(), 13.5f, Kit.TEXT, false), k.top(10));
 
         if ("reported".equals(str(t, "payout_status"))) {
@@ -2391,9 +2572,16 @@ public class MainActivity extends Activity {
             card.addView(k.text("Touchez une image pour l'agrandir.", 12, Kit.MUTED, false), k.top(6));
         }
 
-        TextView go = k.button("Décaisser", Kit.RED, Color.WHITE);
-        go.setOnClickListener(v -> payoutSheet(t, where));
-        card.addView(go, k.top(12));
+        final String po = str(t, "payout_status");
+        if ("proof_sent".equals(po) || "reported".equals(po)) {
+            TextView go = k.button("Décaisser", Kit.RED, Color.WHITE);
+            go.setOnClickListener(v -> payoutSheet(t, where));
+            card.addView(go, k.top(12));
+        } else {
+            TextView wait = k.text("En attente du client : paiement BNB puis preuves. Le bouton Décaisser apparaîtra à la réception des preuves.",
+                    12.5f, Kit.MUTED, false);
+            card.addView(wait, k.top(12));
+        }
         return card;
     }
 

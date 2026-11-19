@@ -127,3 +127,23 @@ create trigger sebpay_on_signup after insert on auth.users
 
 -- ===== Relais Render : IP 74.220.48.0/24 autorisée chez SebPay, site https://ma-boutique-ngu0.onrender.com =====
 update sebpay_keys set relay_url = 'https://ma-boutique-ngu0.onrender.com' where id = 1;
+
+-- ===== Inscriptions validées par l'administrateur (v20) =====
+-- À exécuter AVANT de déployer la nouvelle fonction `sebpay`.
+alter table sebpay_users add column if not exists approved boolean not null default false;
+alter table sebpay_users add column if not exists approved_at timestamptz;
+update sebpay_users set approved = true, approved_at = coalesce(approved_at, now()) where approved = false;
+
+-- Un seul déclencheur crée le profil (le premier compte devient admin et validé, les suivants sont « agent » en attente).
+drop trigger if exists sebpay_on_signup on auth.users;
+create or replace function public.sebpay_assign_role() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare first_user boolean := not exists (select 1 from sebpay_users);
+begin
+  insert into sebpay_users (user_id, role, email, first_name, last_name, approved, approved_at)
+  values (new.id, case when first_user then 'admin' else 'agent' end, new.email,
+          new.raw_user_meta_data->>'first_name', new.raw_user_meta_data->>'last_name',
+          first_user, case when first_user then now() end)
+  on conflict (user_id) do update set email = excluded.email;
+  return new;
+end $$;
