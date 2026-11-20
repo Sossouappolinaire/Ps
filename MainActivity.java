@@ -621,7 +621,7 @@ public class MainActivity extends Activity {
             headSub.setText("Le client paie, le montant est versé automatiquement");
         } else if ("payout".equals(name)) {
             headTitle.setText("Décaisser");
-            headSub.setText("Payer les clients crypto et envoyer depuis le wallet");
+            headSub.setText("Versements à reprendre, clients crypto et envois depuis le wallet");
         } else if ("users".equals(name)) {
             headTitle.setText("Mes utilisateurs");
             headSub.setText("Valider les inscriptions de vos clients");
@@ -646,6 +646,7 @@ public class MainActivity extends Activity {
             content.addView(supportCard(), k.top(0));
             final boolean adminUser = "admin".equals(role);
             if ("payout".equals(name) && !adminUser) { showTab("collect"); return; }
+            if ("payout".equals(name)) content.addView(failedQueue(), k.top(14));
             if ("payout".equals(name)) content.addView(bnbQueue(), k.top(14));
             Form f = new Form("payout".equals(name));
             content.addView(f.build(), k.top(14));
@@ -1062,14 +1063,18 @@ public class MainActivity extends Activity {
                     }
                 }
                 final JSONObject trcp = trc;
+                final String tDigits = amount.getText().toString().replaceAll("\\D", "");
+                final long tAmount = tDigits.isEmpty() || tDigits.length() > 15 ? 0 : Long.parseLong(tDigits);
+                final String tPhone = phone.getText().toString().trim();
+                final String tName = who.getText().toString().trim();
                 k.busy(test, true);
                 status.loading(payout ? "Test du décaissement…" : "Test de l'encaissement et du versement…");
                 io.execute(() -> {
                     try {
-                        JSONArray problems = payout ? api.preflightPayout(c.iso, tslug) : api.preflight(c.iso, tslug, trcp);
+                        JSONArray problems = payout ? api.preflightPayout(c.iso, tslug, tAmount, tPhone, tName.isEmpty() ? null : tName) : api.preflight(c.iso, tslug, trcp);
                         if (problems.length() == 0) {
                             main.post(() -> {
-                                status.ok(payout ? "Test réussi : le décaissement est disponible. Vous pouvez décaisser."
+                                status.ok(payout ? "Test réussi : le décaissement répond pour ce réseau. Le solde du wallet n'est pas vérifié par ce test."
                                         : "Test réussi : l'encaissement et le versement sont disponibles. Vous pouvez encaisser.");
                                 k.busy(test, false);
                             });
@@ -1185,7 +1190,7 @@ public class MainActivity extends Activity {
                 status.loading(payout ? "Vérification du décaissement…" : "Vérification de l'encaissement et du versement…");
                 io.execute(() -> {
                     try {
-                        JSONArray problems = payout ? api.preflightPayout(c.iso, slug) : api.preflight(c.iso, slug, rcp);
+                        JSONArray problems = payout ? api.preflightPayout(c.iso, slug, value, ph, name) : api.preflight(c.iso, slug, rcp);
                         if (problems.length() > 0) {
                             StringBuilder sbp = new StringBuilder(payout ? "Impossible de décaisser pour le moment :" : "Impossible d'encaisser pour le moment :");
                             for (int i = 0; i < problems.length(); i++) sbp.append("\n• ").append(problems.optString(i));
@@ -1416,7 +1421,7 @@ public class MainActivity extends Activity {
         return l;
     }
 
-    /** Étape 1 : montant en USD, pays + réseau + numéro qui recevront l'argent, puis adresse unique chez CryptAPI. */
+    /** Étape 1 : montant en USD, pays + réseau + numéro qui recevront l'argent, puis adresse BNB de l'administrateur. */
     private void cryptoForm(final LinearLayout slot, final Countries.Country payerCountry) {
         slot.removeAllViews();
         // Le pays qui reçoit l'argent est choisi ici (indépendant du pays du payeur) : il doit avoir du Mobile Money.
@@ -1428,6 +1433,48 @@ public class MainActivity extends Activity {
         slot.addView(darkLabel("MONTANT À PAYER (USD)"), k.top(20));
         final EditText amt = darkField("Ex. 25", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
         slot.addView(amt, k.top(8));
+        // Montant équivalent dans la monnaie du pays qui reçoit (mis à jour à chaque saisie / changement de pays)
+        final TextView localView = k.text("", 14.5f, Kit.BNB, true);
+        slot.addView(localView, k.top(8));
+        final int[] quoteSeq = {0};
+        final Runnable[] quoteRun = new Runnable[1];
+        quoteRun[0] = () -> {
+            double u;
+            try {
+                u = Double.parseDouble(amt.getText().toString().trim().replace(',', '.'));
+            } catch (NumberFormatException e) {
+                u = 0;
+            }
+            final int seq = ++quoteSeq[0];
+            if (!(u > 0)) {
+                localView.setText("");
+                return;
+            }
+            final double usdNow = u;
+            final Countries.Country r0 = rc[0];
+            io.execute(() -> {
+                try {
+                    final JSONObject q = api.cryptoQuote(usdNow, r0.iso);
+                    final String line = "Le bénéficiaire recevra \u2248 " + fmt(q.optLong("local_amount")) + " "
+                            + q.optString("currency", r0.currency) + "  (" + r0.name + ")";
+                    main.post(() -> {
+                        if (seq == quoteSeq[0]) localView.setText(line);
+                    });
+                } catch (Exception e) {
+                    main.post(() -> {
+                        if (seq == quoteSeq[0]) localView.setText("");
+                    });
+                }
+            });
+        };
+        amt.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int n) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int n) { }
+            @Override public void afterTextChanged(Editable e) {
+                main.removeCallbacks(quoteRun[0]);
+                main.postDelayed(quoteRun[0], 500);
+            }
+        });
 
         // ---- pays qui reçoit l'argent
         slot.addView(darkLabel("PAYS QUI REÇOIT L'ARGENT"), k.top(18));
@@ -1533,6 +1580,7 @@ public class MainActivity extends Activity {
             rName.setText(r0.name);
             rSub.setText("+" + r0.dial + "  ·  " + r0.currency);
             prefix.setText("+" + r0.dial);
+            quoteRun[0].run();
             phoneLabel.setText("NUMÉRO QUI REÇOIT L'ARGENT  ·  " + r0.flag() + " " + r0.name);
             JSONArray cached = opsCache.get(r0.iso);
             if (cached != null) {
@@ -1614,7 +1662,7 @@ public class MainActivity extends Activity {
         slot.addView(k.text(bnb + " BNB", 28, Color.WHITE, true), k.top(4));
         slot.addView(k.text("\u2248 " + d.optString("amount_usd", "") + " USD", 13, 0xFF9AA1AD, false), k.top(0));
 
-        slot.addView(darkLabel("ADRESSE DE PAIEMENT (UNIQUE POUR CETTE TRANSACTION)"), k.top(18));
+        slot.addView(darkLabel("ADRESSE DE PAIEMENT (BNB SMART CHAIN · BEP-20)"), k.top(18));
         TextView addrView = k.text(addr, 14, Color.WHITE, true);
         addrView.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         addrView.setPadding(k.dp(14), k.dp(14), k.dp(14), k.dp(14));
@@ -1643,9 +1691,13 @@ public class MainActivity extends Activity {
         final String phoneLabel = "+" + str(d, "recipient_phone");
         slot.addView(darkLabel("L'ARGENT SERA ENVOYÉ À"), k.top(18));
         slot.addView(k.text(str(d, "recipient_operator") + "  ·  " + phoneLabel, 15, Color.WHITE, true), k.top(6));
+        if (!str(d, "payout_amount").isEmpty()) {
+            slot.addView(k.text("Montant reçu : \u2248 " + fmt(d.optLong("payout_amount")) + " " + str(d, "recipient_currency"),
+                    15, Kit.BNB, true), k.top(6));
+        }
 
         final StatusBox st = new StatusBox();
-        st.loading("En attente de paiement (24 h maximum)… la confirmation est automatique dès que le BNB arrive.");
+        st.loading("Envoyez le BNB à cette adresse, puis joignez votre capture d'écran de paiement ci-dessous (disponible 2 minutes après). L'administrateur vérifie, puis envoie l'argent.");
         slot.addView(st.box, k.top(16));
         slot.addView(proofSection(ref, System.currentTimeMillis(), 0, true, null), k.top(18));
         TextView again = k.text("Nouveau paiement", 14, Kit.BNB, true);
@@ -2289,6 +2341,9 @@ public class MainActivity extends Activity {
 
         StringBuilder sb = new StringBuilder();
         sb.append("Numéro qui reçoit : +").append(str(t, "recipient_phone"));
+        if (!str(t, "payout_amount").isEmpty()) {
+            sb.append("\nMontant : \u2248 ").append(fmt(t.optLong("payout_amount"))).append(" ").append(str(t, "recipient_currency"));
+        }
         if (!str(t, "expected_bnb").isEmpty()) {
             sb.append("\n").append(new BigDecimal(str(t, "expected_bnb")).stripTrailingZeros().toPlainString()).append(" BNB");
         }
@@ -2492,6 +2547,145 @@ public class MainActivity extends Activity {
         return card;
     }
 
+    // ------------------------------------------------------------------ versements échoués à reprendre
+
+    private static long failedAmount(JSONObject t) {
+        return !str(t, "payout_amount").isEmpty() ? t.optLong("payout_amount") : t.optLong("net_amount");
+    }
+
+    private static String failedCurrency(JSONObject t) {
+        return !str(t, "recipient_currency").isEmpty() ? str(t, "recipient_currency") : str(t, "currency");
+    }
+
+    /** Encaissements réussis dont le versement au bénéficiaire a échoué : l'administrateur les voit ici et décaisse. */
+    private View failedQueue() {
+        final LinearLayout wrap = k.vbox();
+        if (!"admin".equals(role)) return wrap;
+        io.execute(() -> {
+            try {
+                final JSONArray arr = api.failedPayouts();
+                main.post(() -> {
+                    if (!"payout".equals(tab) || arr.length() == 0) return;
+                    wrap.addView(k.sectionLabel("Versements échoués à effectuer (" + arr.length() + ")"));
+                    for (int i = 0; i < arr.length(); i++) {
+                        JSONObject t = arr.optJSONObject(i);
+                        if (t != null) wrap.addView(failedCard(t), k.top(8));
+                    }
+                });
+            } catch (Exception ignored) {
+                // migration SQL pas encore appliquée ou réseau coupé : le reste de l'écran reste utilisable
+            }
+        });
+        return wrap;
+    }
+
+    private String failedWhere(JSONObject t) {
+        String iso = !str(t, "recipient_country").isEmpty() ? str(t, "recipient_country") : str(t, "country");
+        Countries.Country cc = Countries.byIso(iso);
+        return cc != null ? cc.flag() + " " + cc.name : iso;
+    }
+
+    private View failedCard(final JSONObject t) {
+        final String where = failedWhere(t);
+        LinearLayout card = k.card();
+        card.setPadding(k.dp(14), k.dp(14), k.dp(14), k.dp(14));
+        LinearLayout top = k.hbox();
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        String who = str(t, "recipient_name").isEmpty() ? "Bénéficiaire" : str(t, "recipient_name");
+        top.addView(k.text(who, 16, Kit.TEXT, true), k.weight(1));
+        top.addView(k.text("\u2248 " + fmt(failedAmount(t)) + " " + failedCurrency(t), 16, Kit.TEXT, true), k.wrap());
+        card.addView(top);
+        card.addView(k.text(where + "  ·  " + str(t, "recipient_operator") + "\nNuméro : +" + str(t, "recipient_phone"),
+                13.5f, Kit.TEXT, false), k.top(8));
+        TextView why = k.text("\u26A0 " + str(t, "fail_reason"), 13, Kit.RED, true);
+        why.setPadding(k.dp(12), k.dp(10), k.dp(12), k.dp(10));
+        why.setBackground(k.box(Kit.RED_SOFT, 0, 12));
+        card.addView(why, k.top(10));
+        TextView open = k.button("Voir les détails et décaisser", Kit.RED, Color.WHITE);
+        open.setOnClickListener(v -> failedSheet(t, where));
+        card.addView(open, k.top(12));
+        return card;
+    }
+
+    /** Détails du versement échoué : l'administrateur appuie sur « Décaisser » pour envoyer l'argent au numéro concerné. */
+    private void failedSheet(final JSONObject t, String where) {
+        final String ref = str(t, "external_reference");
+        final boolean check = t.optBoolean("fail_check", false);
+        LinearLayout box = k.vbox();
+        box.setPadding(k.dp(20), k.dp(20), k.dp(20), k.dp(20));
+        box.addView(k.text("Versement à effectuer", 20, Kit.TEXT, true));
+        box.addView(k.text("Le client a bien payé, mais l'argent n'est pas arrivé chez le bénéficiaire. "
+                + "En appuyant sur Décaisser, il est envoyé depuis votre wallet au numéro ci-dessous.", 14, Kit.MUTED, false), k.top(8));
+
+        LinearLayout rows = k.vbox();
+        rows.setPadding(k.dp(14), k.dp(6), k.dp(14), k.dp(6));
+        rows.setBackground(k.box(Kit.BG, 0, 14));
+        rows.addView(receiptRow("Bénéficiaire", str(t, "recipient_name").isEmpty() ? "-" : str(t, "recipient_name"), false));
+        rows.addView(receiptRow("Pays", where, false));
+        rows.addView(receiptRow("Réseau", str(t, "recipient_operator"), false));
+        rows.addView(receiptRow("Numéro", "+" + str(t, "recipient_phone"), false));
+        rows.addView(receiptRow("Montant à envoyer", "\u2248 " + fmt(failedAmount(t)) + " " + failedCurrency(t), true));
+        rows.addView(receiptRow("Payé par", "+" + str(t, "phone") + " (" + str(t, "operator") + ")", false));
+        rows.addView(receiptRow("Montant payé", fmt(t.optLong("amount")) + " " + str(t, "currency"), false));
+        rows.addView(receiptRow("Encaissé le", when(str(t, "created_at")), false));
+        box.addView(rows, k.top(16));
+
+        TextView why = k.text("\u26A0 " + str(t, "fail_reason"), 13.5f, Kit.RED, true);
+        why.setPadding(k.dp(12), k.dp(10), k.dp(12), k.dp(10));
+        why.setBackground(k.box(Kit.RED_SOFT, 0, 12));
+        box.addView(why, k.top(12));
+        if (check) {
+            box.addView(k.text("Résultat incertain : avant de décaisser, vérifiez dans l'Historique que l'argent n'est pas déjà parti "
+                    + "pour éviter de payer deux fois.", 13, Kit.MUTED, false), k.top(10));
+        }
+
+        TextView yes = k.button(check ? "J'ai vérifié : Décaisser" : "Décaisser", Kit.RED, Color.WHITE);
+        TextView settled = k.outlineButton("Déjà réglé, retirer de la liste", Kit.PRIMARY);
+        TextView no = k.outlineButton("Fermer", Kit.MUTED);
+        box.addView(yes, k.top(16));
+        box.addView(settled, k.top(10));
+        box.addView(no, k.top(10));
+        final Dialog d = sheet(box, 0);
+        no.setOnClickListener(v -> d.dismiss());
+        yes.setOnClickListener(v -> {
+            k.busy(yes, true);
+            io.execute(() -> {
+                try {
+                    api.failedPayoutSend(ref, check);
+                    main.post(() -> {
+                        d.dismiss();
+                        toast("Versement envoyé au bénéficiaire.");
+                        if ("payout".equals(tab)) showTab("payout");
+                    });
+                } catch (Exception e) {
+                    main.post(() -> {
+                        k.busy(yes, false);
+                        handleError(e, null);
+                    });
+                }
+            });
+        });
+        settled.setOnClickListener(v -> {
+            k.busy(settled, true);
+            io.execute(() -> {
+                try {
+                    api.failedPayoutClose(ref);
+                    main.post(() -> {
+                        d.dismiss();
+                        toast("Retiré de la liste.");
+                        if ("payout".equals(tab)) showTab("payout");
+                    });
+                } catch (Exception e) {
+                    main.post(() -> {
+                        k.busy(settled, false);
+                        handleError(e, null);
+                    });
+                }
+            });
+        });
+        d.show();
+    }
+
     /** Liste des décaissements BNB à traiter : pays, réseau, numéro, preuves, bouton « Décaisser ». */
     private View bnbQueue() {
         final LinearLayout wrap = k.vbox();
@@ -2535,9 +2729,12 @@ public class MainActivity extends Activity {
         StringBuilder sb = new StringBuilder();
         sb.append("Réseau : ").append(str(t, "recipient_operator"));
         sb.append("\nNuméro : +").append(phone);
+        if (!str(t, "payout_amount").isEmpty()) {
+            sb.append("\nÀ envoyer : \u2248 ").append(fmt(t.optLong("payout_amount"))).append(" ").append(str(t, "recipient_currency"));
+        }
         sb.append("\nPaiement BNB : ").append("approved".equals(pay) ? "reçu et confirmé"
                 : "underpaid".equals(pay) ? "montant insuffisant"
-                : "en attente de paiement (expire dans " + leftText(str(t, "created_at")) + ")");
+                : "à vérifier dans votre wallet avec la preuve (expire dans " + leftText(str(t, "created_at")) + ")");
         if (str(t, "proof_sent_at").isEmpty()) sb.append("\nPreuves : pas encore envoyées");
         else sb.append("\nPreuves reçues le ").append(when(str(t, "proof_sent_at")));
         card.addView(k.text(sb.toString(), 13.5f, Kit.TEXT, false), k.top(10));

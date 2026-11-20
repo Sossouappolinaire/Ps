@@ -244,8 +244,16 @@ class Api {
 
     /** Vérifie avant un décaissement que SebPay répond pour ce pays et ce réseau. Retourne la liste des problèmes (vide = prêt). */
     JSONArray preflightPayout(String country, String operator) throws Exception {
+        return preflightPayout(country, operator, 0, "", null);
+    }
+
+    /** Idem, avec les données saisies (montant, numéro, nom) pour les contrôler aussi. Les champs vides sont ignorés. */
+    JSONArray preflightPayout(String country, String operator, long amount, String phone, String name) throws Exception {
         JSONObject p = new JSONObject().put("action", "preflight").put("type", "payout")
                 .put("country", country).put("operator", operator);
+        if (amount > 0) p.put("amount", amount);
+        if (phone != null && !phone.isEmpty()) p.put("phone", phone);
+        if (name != null) p.put("recipient_name", name);
         JSONArray a = call(p).getJSONObject("data").optJSONArray("problems");
         return a != null ? a : new JSONArray();
     }
@@ -263,6 +271,12 @@ class Api {
     JSONObject cryptoCreate(double amountUsd, String country, String recipientOperator, String recipientPhone) throws Exception {
         return call(new JSONObject().put("action", "crypto_create").put("amount_usd", amountUsd).put("country", country)
                 .put("recipient_operator", recipientOperator).put("recipient_phone", recipientPhone))
+                .getJSONObject("data");
+    }
+
+    /** Montant équivalent en monnaie locale du pays qui reçoit : {currency, rate, local_amount}. */
+    JSONObject cryptoQuote(double amountUsd, String country) throws Exception {
+        return call(new JSONObject().put("action", "crypto_quote").put("amount_usd", amountUsd).put("country", country))
                 .getJSONObject("data");
     }
 
@@ -293,6 +307,22 @@ class Api {
     /** Administrateur : l'argent a été envoyé à la main, marquer « Payé ». */
     void cryptoPay(String reference) throws Exception {
         call(new JSONObject().put("action", "crypto_pay").put("reference", reference));
+    }
+
+    /** Administrateur : encaissements réussis dont le versement au bénéficiaire a échoué (à reprendre). */
+    JSONArray failedPayouts() throws Exception {
+        JSONArray a = call(new JSONObject().put("action", "payout_failed_list")).optJSONArray("data");
+        return a != null ? a : new JSONArray();
+    }
+
+    /** Administrateur : envoie l'argent au bénéficiaire (checked = vérifié dans l'historique que rien n'est parti). */
+    void failedPayoutSend(String reference, boolean checked) throws Exception {
+        call(new JSONObject().put("action", "payout_failed_send").put("reference", reference).put("confirm_checked", checked));
+    }
+
+    /** Administrateur : versement déjà réglé en dehors de l'appli, on le retire de la liste. */
+    void failedPayoutClose(String reference) throws Exception {
+        call(new JSONObject().put("action", "payout_failed_close").put("reference", reference));
     }
 
     /** Client : argent non reçu. */
