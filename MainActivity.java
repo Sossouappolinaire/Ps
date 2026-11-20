@@ -2000,12 +2000,17 @@ public class MainActivity extends Activity {
             d.dismiss();
             k.busy(go, true);
             status.loading("Envoi en cours…");
+            final Countries.Country trc = rcp != null ? Countries.byIso(rcp.optString("country")) : null;
+            final String trackTarget = payout
+                    ? (str(op, "name").isEmpty() ? slug : str(op, "name")) + " · +" + c.dial + " " + ph
+                    : (rcp != null ? rcp.optString("operator_name") + " · +" + (trc != null ? trc.dial : c.dial) + " " + rcp.optString("phone") : "+" + c.dial + " " + ph);
             io.execute(() -> {
                 try {
                     JSONObject t = payout
                             ? api.payout(c.iso, slug, ph, who, value)
                             : api.collect(c.iso, slug, ph, value, code, rcp);
                     final String ref = t.getString("external_reference");
+                    final JSONObject first = t;
                     final String link = t.isNull("provider_link") ? "" : t.optString("provider_link", "");
                     main.post(() -> {
                         status.loading(payout
@@ -2020,7 +2025,10 @@ public class MainActivity extends Activity {
                                 toast("Aucune application pour ouvrir le lien : il a été copié.");
                             }
                         }
-                        startPolling(ref, status, go, payout);
+                        final Tracker tr = new Tracker(payout, trackTarget);
+                        tr.update(first);
+                        tr.show();
+                        startPolling(ref, status, go, payout, tr);
                     });
                 } catch (Exception e) {
                     main.post(() -> {
@@ -2031,6 +2039,148 @@ public class MainActivity extends Activity {
             });
         });
         d.show();
+    }
+
+    // ------------------------------------------------------------------ suivi en direct (chronologie)
+
+    private static boolean legFailed(JSONObject t) {
+        JSONObject leg = t.optJSONObject("payout_leg");
+        String note = str(t, "payout_note");
+        return (leg != null && "rejected".equals(leg.optString("status")))
+                || note.startsWith("Versement refusé") || note.startsWith("Montant trop faible")
+                || note.startsWith("Versement automatique non confirmé");
+    }
+
+    /** Vrai quand plus rien ne bouge : le bénéficiaire a reçu, ou l'opération a échoué. */
+    private static boolean trackingDone(JSONObject t, boolean payout) {
+        String st = t.optString("status", "pending");
+        if ("rejected".equals(st)) return true;
+        if (!"approved".equals(st)) return false;
+        if (payout || str(t, "recipient_phone").isEmpty()) return true;
+        JSONObject leg = t.optJSONObject("payout_leg");
+        return (leg != null && "approved".equals(leg.optString("status"))) || legFailed(t);
+    }
+
+    private String clock(String iso) {
+        try {
+            SimpleDateFormat in = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US);
+            in.setTimeZone(TimeZone.getTimeZone("UTC"));
+            return new SimpleDateFormat("HH:mm:ss", Locale.FRANCE).format(in.parse(iso.substring(0, 19)));
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /** Fenêtre « Suivi en direct » : demande → paiement → reversement → reçu, mise à jour à chaque sondage. */
+    private final class Tracker {
+        final boolean payout;
+        final String target;
+        final LinearLayout box = k.vbox();
+        final TextView amountTv = k.text("", 30, Color.WHITE, true);
+        final LinearLayout stepsBox = k.vbox();
+        final LinearLayout feesBox = k.vbox();
+        Dialog dialog;
+
+        Tracker(boolean payout, String target) {
+            this.payout = payout;
+            this.target = target;
+            box.setPadding(k.dp(20), k.dp(20), k.dp(20), k.dp(20));
+            box.addView(k.text("Opération en cours", 14, Kit.MUTED, false));
+            box.addView(k.text("Suivi en direct", 24, Kit.TEXT, true), k.top(2));
+            LinearLayout hero = k.vbox();
+            hero.setPadding(k.dp(18), k.dp(16), k.dp(18), k.dp(16));
+            hero.setBackground(k.box(Kit.PRIMARY, 0, 18));
+            hero.addView(k.text("Le bénéficiaire va recevoir", 13, 0xCCFFFFFF, false));
+            hero.addView(amountTv, k.top(4));
+            hero.addView(k.text("sur " + target, 13, 0xCCFFFFFF, false), k.top(4));
+            box.addView(hero, k.top(14));
+            stepsBox.setPadding(k.dp(16), k.dp(10), k.dp(16), k.dp(10));
+            stepsBox.setBackground(k.box(Kit.BG, 0, 18));
+            box.addView(stepsBox, k.top(12));
+            feesBox.setPadding(k.dp(16), k.dp(6), k.dp(16), k.dp(6));
+            feesBox.setBackground(k.box(Kit.BG, 0, 18));
+            box.addView(feesBox, k.top(12));
+            TextView close = k.outlineButton("Fermer", Kit.MUTED);
+            close.setOnClickListener(v -> { if (dialog != null) dialog.dismiss(); });
+            box.addView(close, k.top(14));
+        }
+
+        void show() {
+            dialog = sheet(box, 0);
+            dialog.show();
+        }
+
+        /** state : 0 en attente, 1 en cours, 2 fait, 3 échec */
+        private void step(int state, String title, String sub) {
+            LinearLayout row = k.hbox();
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(0, k.dp(8), 0, k.dp(8));
+            View mark;
+            if (state == 1) {
+                ProgressBar pb = new ProgressBar(MainActivity.this);
+                pb.setIndeterminateTintList(ColorStateList.valueOf(Kit.PRIMARY));
+                mark = pb;
+            } else {
+                TextView c = k.text(state == 2 ? "✓" : state == 3 ? "✕" : "", 15, Color.WHITE, true);
+                c.setGravity(Gravity.CENTER);
+                c.setBackground(k.box(state == 2 ? Kit.PRIMARY : state == 3 ? Kit.RED : Kit.PRIMARY_SOFT, 0, 15));
+                mark = c;
+            }
+            row.addView(mark, k.size(30, 30));
+            LinearLayout txt = k.vbox();
+            txt.addView(k.text(title, 15.5f, state == 0 ? Kit.MUTED : Kit.TEXT, true));
+            if (!sub.isEmpty()) txt.addView(k.text(sub, 12.5f, state == 3 ? Kit.RED : Kit.MUTED, false));
+            LinearLayout.LayoutParams tp = k.weight(1);
+            tp.leftMargin = k.dp(14);
+            row.addView(txt, tp);
+            stepsBox.addView(row);
+        }
+
+        void update(JSONObject t) {
+            String st = t.optString("status", "pending");
+            JSONObject leg = t.optJSONObject("payout_leg");
+            String ls = leg == null ? "" : leg.optString("status", "pending");
+            String cur = str(t, "recipient_currency").isEmpty() ? str(t, "currency") : str(t, "recipient_currency");
+            long recv = payout ? t.optLong("amount")
+                    : (!t.isNull("payout_amount") ? t.optLong("payout_amount") : t.optLong("net_amount"));
+            amountTv.setText(fmt(recv) + " " + cur);
+
+            stepsBox.removeAllViews();
+            step(2, "Demande enregistrée", clock(str(t, "created_at")));
+            if (payout) {
+                step("approved".equals(st) ? 2 : "rejected".equals(st) ? 3 : 1, "Envoi vers " + target,
+                        "rejected".equals(st) ? "Refusé par le réseau (le wallet est recrédité)"
+                                : "approved".equals(st) ? clock(str(t, "updated_at")) : "En cours…");
+                step("approved".equals(st) ? 2 : 0, "Reçu par le bénéficiaire",
+                        "approved".equals(st) ? clock(str(t, "updated_at")) : "En attente");
+            } else {
+                String confirmedAt = leg != null ? clock(leg.optString("created_at")) : clock(str(t, "updated_at"));
+                step("approved".equals(st) ? 2 : "rejected".equals(st) ? 3 : 1, "Paiement confirmé",
+                        "approved".equals(st) ? confirmedAt
+                                : "rejected".equals(st) ? "Paiement refusé ou expiré, rien n'est débité"
+                                : "Le client doit valider sur son téléphone");
+                int s3 = !"approved".equals(st) ? 0 : "approved".equals(ls) ? 2 : legFailed(t) ? 3 : 1;
+                step(s3, s3 == 2 ? "Reversement effectué" : "Reversement en cours…",
+                        s3 == 3 ? str(t, "payout_note") : s3 == 1 ? "Envoi vers " + target
+                                : s3 == 2 ? clock(leg.optString("created_at")) : "");
+                step(s3 == 2 ? 2 : 0, "Reçu par le bénéficiaire",
+                        s3 == 2 ? clock(leg.optString("updated_at")) : "En attente");
+            }
+
+            feesBox.removeAllViews();
+            long total = t.optLong("amount");
+            long fee = total - t.optLong("net_amount");
+            if (!payout && fee > 0 && fee < total && !t.isNull("net_amount")) {
+                feesBox.addView(receiptRow("Frais", fmt(fee) + " " + str(t, "currency"), false));
+                feesBox.addView(receiptRow("Total payé", fmt(total) + " " + str(t, "currency"), true));
+                feesBox.setVisibility(View.VISIBLE);
+            } else if (payout && total > 0) {
+                feesBox.addView(receiptRow("Total débité", fmt(total) + " " + str(t, "currency"), true));
+                feesBox.setVisibility(View.VISIBLE);
+            } else {
+                feesBox.setVisibility(View.GONE);
+            }
+        }
     }
 
     // ------------------------------------------------------------------ suivi du statut
@@ -2044,51 +2194,52 @@ public class MainActivity extends Activity {
         tickers.clear();
     }
 
-    private void startPolling(final String ref, final StatusBox status, final View go, final boolean payout) {
+    private void startPolling(final String ref, final StatusBox status, final View go, final boolean payout, final Tracker tr) {
         stopPolling();
         pollCount = 0;
+        final int maxPolls = payout ? 60 : 240; // un reversement peut prendre quelques minutes
         poller = new Runnable() {
             @Override
             public void run() {
                 final Runnable self = this;
                 io.execute(() -> {
-                    String st = "pending";
                     JSONObject t = null;
                     try {
                         t = api.status(ref);
-                        st = t.optString("status", "pending");
                     } catch (Exception ignored) {
                         // erreur passagère : on réessaie au prochain tour
                     }
-                    final String finalStatus = st;
                     final JSONObject row = t;
                     main.post(() -> {
                         if (poller != self) return; // annulé (changement d'onglet, etc.)
-                        if ("approved".equals(finalStatus)) {
+                        if (row != null && tr != null) tr.update(row);
+                        final String st = row == null ? "pending" : row.optString("status", "pending");
+                        if (row != null && trackingDone(row, payout)) {
                             poller = null;
-                            status.ok((payout ? "Décaissement réussi" : "Encaissement réussi")
-                                    + (row != null ? " : " + money(row) : "")
-                                    + (!payout && row != null && !str(row, "recipient_phone").isEmpty()
-                                    ? ". Versement au +" + str(row, "recipient_phone") + " : " + str(row, "payout_note") : ""));
+                            JSONObject leg = row.optJSONObject("payout_leg");
+                            if ("rejected".equals(st)) {
+                                status.err(payout
+                                        ? "Décaissement refusé (le wallet est remboursé automatiquement)."
+                                        : "Paiement refusé ou expiré. Aucun montant débité.");
+                            } else if (!payout && legFailed(row)) {
+                                status.warn("Paiement reçu, mais le reversement n'a pas abouti : " + str(row, "payout_note"));
+                            } else {
+                                status.ok((payout ? "Décaissement réussi" : "Encaissement réussi") + " : " + money(row)
+                                        + (!payout && leg != null ? ". Reçu par +" + str(row, "recipient_phone") : ""));
+                            }
                             k.busy(go, false);
-                        } else if ("rejected".equals(finalStatus)) {
+                        } else if (++pollCount > maxPolls) {
                             poller = null;
-                            status.err(payout
-                                    ? "Décaissement refusé (le wallet est remboursé automatiquement)."
-                                    : "Paiement refusé ou expiré. Aucun montant débité.");
-                            k.busy(go, false);
-                        } else if (++pollCount > 60) {
-                            poller = null;
-                            status.warn("Toujours en attente. Suivez-le dans l'onglet Historique.");
+                            status.warn("Toujours en cours. Suivez-le dans l'onglet Historique.");
                             k.busy(go, false);
                         } else {
-                            main.postDelayed(self, 3000);
+                            main.postDelayed(self, 2500);
                         }
                     });
                 });
             }
         };
-        main.postDelayed(poller, 3000);
+        main.postDelayed(poller, 1500);
     }
 
     // ------------------------------------------------------------------ historique
